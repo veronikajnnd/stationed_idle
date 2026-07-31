@@ -253,3 +253,127 @@ FROM (
     LEFT JOIN tmp_dominant_location d ON d.medical_device_ledger_id = b.medical_device_ledger_id
 ) x
 GROUP BY is_stationed;
+
+
+-- ============================================================================
+-- ---- 追加調査 (Miyazawa 2026-07-31 レビュー #2, #4 対応) ----
+-- ---- Follow-up investigation (per Miyazawa's 2026-07-31 review items #2, #4) ----
+-- ============================================================================
+
+-- ---- (#2-a) 返却日が NULL の貸出件数 ----
+-- ---- (#2-a) Count of rentals with NULL return date ----
+SELECT
+    COUNT(*) AS total_rentals,
+    COUNT(*) FILTER (WHERE calculated_return_date IS NULL) AS open_rentals,
+    ROUND(
+        COUNT(*) FILTER (WHERE calculated_return_date IS NULL)::numeric
+            / NULLIF(COUNT(*), 0) * 100,
+        2
+    ) AS open_rentals_pct
+FROM cur.medical_device_rental_history;
+
+-- 対象期間に絞った版 (①の母集団に効いてくる分だけを見るため)
+-- Period-scoped version (isolates only the rows that actually feed into ①'s population)
+SELECT
+    COUNT(*) AS total_rentals_in_period,
+    COUNT(*) FILTER (WHERE r.calculated_return_date IS NULL) AS open_rentals_in_period,
+    ROUND(
+        COUNT(*) FILTER (WHERE r.calculated_return_date IS NULL)::numeric
+            / NULLIF(COUNT(*), 0) * 100,
+        2
+    ) AS open_rentals_in_period_pct
+FROM cur.medical_device_rental_history r
+CROSS JOIN tmp_params p
+WHERE r.calculated_rental_start_date <= p.period_end
+AND COALESCE(r.calculated_return_date, p.period_end) >= p.period_start;
+
+-- ---- (#2-b) occupancy_rate_pct の分布 (100%付近に山があるか) ----
+-- ---- (#2-b) Distribution of occupancy_rate_pct (check for a pileup near 100%) ----
+-- tmp_committed_hours / tmp_base_devices を再利用し、01 のメインSELECTと
+-- 同じ計算式で occupancy_rate_pct を作ってからバケット化する。
+--
+-- Reuses tmp_committed_hours / tmp_base_devices and recomputes occupancy_rate_pct
+-- with the exact same formula as ①'s main SELECT before bucketing.
+
+CREATE TEMP TABLE tmp_occupancy AS
+SELECT
+    b.equipment_id,
+    b.medical_device_ledger_id,
+    COALESCE(c.committed_hours, 0) AS committed_hours,
+    EXTRACT(EPOCH FROM ((p.period_end + INTERVAL '1 day') - p.period_start)) / 3600.0 AS available_hours,
+    ROUND((COALESCE(c.committed_hours, 0)
+        / (EXTRACT(EPOCH FROM ((p.period_end + INTERVAL '1 day') - p.period_start)) / 3600.0)
+        * 100)::numeric, 2) AS occupancy_rate_pct
+FROM tmp_base_devices b
+CROSS JOIN tmp_params p
+LEFT JOIN tmp_committed_hours c ON c.medical_device_ledger_id = b.medical_device_ledger_id;
+
+SELECT
+    CASE
+        WHEN occupancy_rate_pct = 0   THEN '00 (未稼働 / zero)'
+        WHEN occupancy_rate_pct < 25  THEN '01-24%'
+        WHEN occupancy_rate_pct < 50  THEN '25-49%'
+        WHEN occupancy_rate_pct < 75  THEN '50-74%'
+        WHEN occupancy_rate_pct < 95  THEN '75-94%'
+        WHEN occupancy_rate_pct < 100 THEN '95-99%'
+        WHEN occupancy_rate_pct = 100 THEN '100% ちょうど / exactly 100'
+        ELSE '100%+ (要確認)'
+    END AS bucket,
+    COUNT(*) AS device_count,
+    ROUND(COUNT(*)::numeric / SUM(COUNT(*)) OVER () * 100, 2) AS pct_of_total
+FROM tmp_occupancy
+GROUP BY 1
+ORDER BY MIN(occupancy_rate_pct);
+
+-- 100%ちょうどの機器のうち、"return date が NULL の貸出" が寄与しているものの件数
+-- (山の正体が open_rentals かどうかを直接つなげて確認する)
+--
+-- Among devices sitting exactly at 100%, how many have at least one contributing
+-- rental with a NULL return date (directly links the pileup to open_rentals)
+
+SELECT
+    COUNT(DISTINCT o.medical_device_ledger_id) AS devices_at_100pct,
+    COUNT(DISTINCT o.medical_device_ledger_id) FILTER (
+        WHERE EXISTS (
+            SELECT 1
+            FROM cur.medical_device_rental_history r
+            CROSS JOIN tmp_params p
+            WHERE r.medical_device_ledger_id = o.medical_device_ledger_id
+            AND r.calculated_return_date IS NULL
+            AND r.calculated_rental_start_date <= p.period_end
+        )
+    ) AS devices_at_100pct_with_open_rental
+FROM tmp_occupancy o
+WHERE o.occupancy_rate_pct = 100;
+
+-- ---- (#4) ledger にマッチしなかった機器数 (母集団の取りこぼし確認) ----
+-- ---- (#4) Devices that did not match the ledger (checks for dropped rows in the population) ----
+SELECT
+    COUNT(*) AS total_base_devices,
+    COUNT(*) FILTER (WHERE medical_device_ledger_id IS NULL) AS unmatched_to_ledger,
+    ROUND(
+        COUNT(*) FILTER (WHERE medical_device_ledger_id IS NULL)::numeric
+            / NULLIF(COUNT(*), 0) * 100,
+        2
+    ) AS unmatched_pct
+FROM tmp_base_devices;
+
+-- unmatched な機器が is_stationed=false のうちどれだけを占めるか
+-- (「常設ではない」と「判定できなかった」を切り分けるための直接証拠)
+--
+-- How much of is_stationed=false is actually "unmatched to ledger"
+-- (direct evidence separating "not stationed" from "could not be judged")
+
+SELECT
+    COUNT(*) FILTER (WHERE b.medical_device_ledger_id IS NULL) AS false_due_to_unmatched,
+    COUNT(*) FILTER (WHERE b.medical_device_ledger_id IS NOT NULL) AS false_due_to_activity,
+    COUNT(*) AS total_false
+FROM tmp_base_devices b
+LEFT JOIN tmp_dominant_location d ON d.medical_device_ledger_id = b.medical_device_ledger_id
+LEFT JOIN tmp_committed_hours c ON c.medical_device_ledger_id = b.medical_device_ledger_id
+CROSS JOIN tmp_params p
+WHERE NOT (
+    COALESCE(c.committed_hours, 0)
+        / (EXTRACT(EPOCH FROM ((p.period_end + INTERVAL '1 day') - p.period_start)) / 3600.0) >= 0.95
+    AND COALESCE(d.dominant_location_hours, 0) / NULLIF(c.committed_hours, 0) >= 0.80
+);
