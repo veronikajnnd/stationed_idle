@@ -1,4 +1,4 @@
--- method_b_cross_script_check.sql
+sed -i '1i \\pset pager off' check2.sql
 
 DROP FUNCTION IF EXISTS tmp_kana_to_romaji(text);
 DROP TABLE IF EXISTS tmp_manufacturer_normalized, tmp_katakana_romaji_map, tmp_manufacturer_romaji;
