@@ -20,8 +20,8 @@ FROM cur.medical_device_ledger
 WHERE manufacturer_name IS NOT NULL
 GROUP BY manufacturer_name;
 
-CREATE TEMP TABLE tmp_katakana_romaji_map (kana text, romaji text) AS
-VALUES
+CREATE TEMP TABLE tmp_katakana_romaji_map AS
+SELECT * FROM (VALUES
     ('ｷｬ','kya'),('ｷｭ','kyu'),('ｷｮ','kyo'),('ｷﾞｬ','gya'),('ｷﾞｭ','gyu'),('ｷﾞｮ','gyo'),
     ('ｼｬ','sha'),('ｼｭ','shu'),('ｼｮ','sho'),('ｼﾞｬ','ja'),('ｼﾞｭ','ju'),('ｼﾞｮ','jo'),
     ('ﾁｬ','cha'),('ﾁｭ','chu'),('ﾁｮ','cho'),('ﾆｬ','nya'),('ﾆｭ','nyu'),('ﾆｮ','nyo'),
@@ -44,7 +44,8 @@ VALUES
     ('ﾗ','ra'),('ﾘ','ri'),('ﾙ','ru'),('ﾚ','re'),('ﾛ','ro'),
     ('ﾜ','wa'),('ｦ','wo'),('ﾝ','n'),
     ('ｧ',''),('ｨ',''),('ｩ',''),('ｪ',''),('ｫ',''),('ｯ',''),
-    ('ｰ','');
+    ('ｰ','')
+) AS t(kana, romaji);
 
 CREATE OR REPLACE FUNCTION tmp_kana_to_romaji(input text) RETURNS text AS $$
 DECLARE
