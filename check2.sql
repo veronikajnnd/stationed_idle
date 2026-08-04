@@ -61,7 +61,7 @@ CREATE TEMP TABLE tmp_manufacturer_romaji AS
 SELECT
     original_name,
     device_count,
-    LOWER(tmp_kana_to_romaji(normalized_name)) AS romaji_attempt
+    LOWER(tmp_kana_to_romaji(original_name)) AS romaji_attempt
 FROM tmp_manufacturer_normalized;
 
 -- Method A: substring containment
