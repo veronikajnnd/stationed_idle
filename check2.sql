@@ -1,5 +1,3 @@
--- method_b_cross_script_check.sql
-
 DROP FUNCTION IF EXISTS tmp_kana_to_romaji(text);
 DROP TABLE IF EXISTS tmp_manufacturer_normalized, tmp_katakana_romaji_map, tmp_manufacturer_romaji;
 
