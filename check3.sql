@@ -57,7 +57,20 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Sorted by phonetic key so similar-sounding rows land near each other.
+-- Method A: substring containment
+SELECT
+    a.original_name AS shorter_name,
+    a.device_count AS shorter_device_count,
+    b.original_name AS longer_name,
+    b.device_count AS longer_device_count
+FROM tmp_manufacturer_normalized a
+JOIN tmp_manufacturer_normalized b
+    ON a.normalized_name <> b.normalized_name
+    AND b.normalized_name LIKE '%' || a.normalized_name || '%'
+    AND LENGTH(a.normalized_name) >= 3
+ORDER BY LENGTH(a.normalized_name) DESC, b.device_count DESC;
+
+-- Method B: sorted by phonetic key so similar-sounding rows land near each other.
 -- Main output: all 179 manufacturers, Latin as-is / kana+kanji romanized,
 SELECT
     m.original_name,
