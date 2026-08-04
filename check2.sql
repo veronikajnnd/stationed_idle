@@ -78,43 +78,31 @@ JOIN tmp_manufacturer_normalized b
 ORDER BY LENGTH(a.normalized_name) DESC, b.device_count DESC;
 
 -- Method B: cross-script (katakana romanized vs Latin names)
-SELECT
-    latin.original_name AS latin_name,
-    latin.device_count AS latin_device_count,
-    kana.original_name AS kana_original_name,
-    kana.romaji_attempt,
-    kana.device_count AS kana_device_count,
-    LEVENSHTEIN(
-        LOWER(REGEXP_REPLACE(latin.original_name, '[^A-Za-z]', '', 'g')),
-        kana.romaji_attempt
-    ) AS edit_distance,
-    GREATEST(
-        LENGTH(LOWER(REGEXP_REPLACE(latin.original_name, '[^A-Za-z]', '', 'g'))),
-        LENGTH(kana.romaji_attempt)
-    ) AS max_len
-FROM tmp_manufacturer_romaji latin
-JOIN tmp_manufacturer_romaji kana
-    ON latin.original_name <> kana.original_name
-    AND latin.original_name ~ '^[A-Za-z0-9&.,\s]+$'
-    AND kana.original_name !~ '^[A-Za-z0-9&.,\s]+$'
-    AND kana.romaji_attempt !~ '[\x{4E00}-\x{9FFF}]'
-    AND LENGTH(LOWER(REGEXP_REPLACE(latin.original_name, '[^A-Za-z]', '', 'g'))) >= 4
-    AND LENGTH(kana.romaji_attempt) >= 4
-WHERE LEVENSHTEIN(
-        LOWER(REGEXP_REPLACE(latin.original_name, '[^A-Za-z]', '', 'g')),
-        kana.romaji_attempt
-    )::numeric
-    / GREATEST(
-        LENGTH(LOWER(REGEXP_REPLACE(latin.original_name, '[^A-Za-z]', '', 'g'))),
-        LENGTH(kana.romaji_attempt)
-    ) <= 0.3
-ORDER BY
-    LEVENSHTEIN(
-        LOWER(REGEXP_REPLACE(latin.original_name, '[^A-Za-z]', '', 'g')),
-        kana.romaji_attempt
-    )::numeric
-    / GREATEST(
-        LENGTH(LOWER(REGEXP_REPLACE(latin.original_name, '[^A-Za-z]', '', 'g'))),
-        LENGTH(kana.romaji_attempt)
-    ),
-    latin.device_count + kana.device_count DESC;
+WITH scored AS (
+    SELECT
+        latin.original_name AS latin_name,
+        latin.device_count AS latin_device_count,
+        kana.original_name AS kana_original_name,
+        kana.romaji_attempt,
+        kana.device_count AS kana_device_count,
+        LEVENSHTEIN(
+            LOWER(REGEXP_REPLACE(latin.original_name, '[^A-Za-z]', '', 'g')),
+            kana.romaji_attempt
+        ) AS edit_distance,
+        GREATEST(
+            LENGTH(LOWER(REGEXP_REPLACE(latin.original_name, '[^A-Za-z]', '', 'g'))),
+            LENGTH(kana.romaji_attempt)
+        ) AS max_len
+    FROM tmp_manufacturer_romaji latin
+    JOIN tmp_manufacturer_romaji kana
+        ON latin.original_name <> kana.original_name
+        AND latin.original_name ~ '^[A-Za-z0-9&.,\s]+$'
+        AND kana.original_name !~ '^[A-Za-z0-9&.,\s]+$'
+        AND kana.romaji_attempt !~ '[\u4e00-\u9fff]'
+        AND LENGTH(LOWER(REGEXP_REPLACE(latin.original_name, '[^A-Za-z]', '', 'g'))) >= 4
+        AND LENGTH(kana.romaji_attempt) >= 4
+)
+SELECT *
+FROM scored
+WHERE edit_distance::numeric / max_len <= 0.3
+ORDER BY (edit_distance::numeric / max_len), (latin_device_count + kana_device_count) DESC;
