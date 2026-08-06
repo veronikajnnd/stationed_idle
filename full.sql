@@ -272,5 +272,3 @@ FROM classified c
 LEFT JOIN tmp_active_devices_c5 ad ON ad.medical_device_ledger_id = c.medical_device_ledger_id
 GROUP BY 1
 ORDER BY idle_rate_pct DESC;
-
-\copy
