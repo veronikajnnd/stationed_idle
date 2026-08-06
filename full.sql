@@ -218,7 +218,7 @@ ORDER BY stationed_count DESC;
 
 -- ============================================================================
 -- Chart 5: 分類別 未稼働率② (classification_id_level1 ベース、report_selection は使わない §4.A)
--- top-14 category_major (100+ devices), 「所管外機器」除外, + 「その他」
+-- top-14 category_major (100+ devices), 「所管外機器」除外, + 「その他（N分類）」
 -- ============================================================================
 -- 対象期間内に貸出 or 修理の実績がある機器
 CREATE TEMP TABLE tmp_active_devices_c5 AS
@@ -228,15 +228,15 @@ FROM (
     FROM cur.medical_device_rental_history r
     CROSS JOIN tmp_params p
     WHERE r.medical_device_ledger_id IS NOT NULL
-    AND r.calculated_rental_start_date <= p.period_end
-    AND COALESCE(r.calculated_return_date, p.period_end) >= p.period_start
+        AND r.calculated_rental_start_date <= p.period_end
+        AND COALESCE(r.calculated_return_date, p.period_end) >= p.period_start
     UNION
     SELECT rep.medical_device_ledger_id
     FROM cur.medical_device_repair_history rep
     CROSS JOIN tmp_params p
     WHERE rep.medical_device_ledger_id IS NOT NULL
-    AND rep.calculated_trouble_date <= p.period_end
-    AND COALESCE(rep.calculated_completion_date, p.period_end) >= p.period_start
+        AND rep.calculated_trouble_date <= p.period_end
+        AND COALESCE(rep.calculated_completion_date, p.period_end) >= p.period_start
 ) combined;
 
 WITH classified AS (
@@ -249,19 +249,37 @@ WITH classified AS (
         AND fec.classification_level = 1
     CROSS JOIN tmp_params p
     WHERE fec.medical_facility_id = p.facility_id
-    AND fec.classification_name <> '所管外機器'
+        AND fec.classification_name <> '所管外機器'
+),
+category_counts AS (
+    -- one row per classification_name, used both to pick top14 and to
+    -- count how many distinct classifications get folded into その他
+    SELECT
+        classification_name,
+        COUNT(*) AS n
+    FROM classified
+    GROUP BY classification_name
 ),
 top14 AS (
     SELECT classification_name
-    FROM classified
-    GROUP BY classification_name
-    HAVING COUNT(*) >= 100
-    ORDER BY COUNT(*) DESC
+    FROM category_counts
+    WHERE n >= 100
+    ORDER BY n DESC
     LIMIT 14
+),
+other_label AS (
+    -- どの classification_name が top14 に入らず「その他」に畳まれたか、その件数
+    SELECT
+        'その他（' || COUNT(*) || '分類）' AS label
+    FROM category_counts
+    WHERE classification_name NOT IN (SELECT classification_name FROM top14)
 )
 SELECT
-    CASE WHEN c.classification_name IN (SELECT classification_name FROM top14)
-        THEN c.classification_name ELSE 'その他' END AS category,
+    CASE
+        WHEN c.classification_name IN (SELECT classification_name FROM top14)
+            THEN c.classification_name
+        ELSE (SELECT label FROM other_label)
+    END AS category,
     COUNT(*) AS n,
     COUNT(*) FILTER (WHERE ad.medical_device_ledger_id IS NOT NULL) AS active_count,
     ROUND(
