@@ -37,12 +37,12 @@ SELECT
 FROM pub.medical_equipment me
 CROSS JOIN tmp_params p
 LEFT JOIN cur.medical_device_ledger l
-  ON l.medical_facility_id = me.medical_facility_id
- AND COALESCE(NULLIF(l.client_device_number, ''), l.medical_facility_seq_id::text)
-     = me.facility_equipment_number
+ON l.medical_facility_id = me.medical_facility_id
+AND COALESCE(NULLIF(l.client_device_number, ''), l.medical_facility_seq_id::text)
+    = me.facility_equipment_number
 WHERE me.medical_facility_id = p.facility_id;
 
--- ---- is_stationed の再計算 (01_is_stationed.sql と同一ロジック) ----
+-- ---- is_stationed の再計算  ----
 CREATE TEMP TABLE tmp_committed_intervals AS
 SELECT medical_device_ledger_id, location, tsrange(clipped_start, clipped_end, '[)') AS interval
 FROM (
@@ -55,8 +55,8 @@ FROM (
     FROM cur.medical_device_rental_history r
     CROSS JOIN tmp_params p
     WHERE r.medical_device_ledger_id IS NOT NULL
-      AND r.calculated_rental_start_date <= p.period_end
-      AND COALESCE(r.calculated_return_date, p.period_end) >= p.period_start
+    AND r.calculated_rental_start_date <= p.period_end
+    AND COALESCE(r.calculated_return_date, p.period_end) >= p.period_start
 
     UNION ALL
 
@@ -71,8 +71,8 @@ FROM (
     FROM cur.medical_device_repair_history rep
     CROSS JOIN tmp_params p
     WHERE rep.medical_device_ledger_id IS NOT NULL
-      AND rep.calculated_trouble_date <= p.period_end::timestamp + INTERVAL '1 day'
-      AND COALESCE(rep.calculated_completion_date, p.period_end::timestamp) >= p.period_start::timestamp
+    AND rep.calculated_trouble_date <= p.period_end::timestamp + INTERVAL '1 day'
+    AND COALESCE(rep.calculated_completion_date, p.period_end::timestamp) >= p.period_start::timestamp
 ) all_activity
 WHERE clipped_start < clipped_end;
 
@@ -183,9 +183,9 @@ SELECT
 FROM cur.medical_device_rental_history r
 CROSS JOIN tmp_params p
 WHERE r.medical_device_ledger_id IS NOT NULL
-  AND r.recipient_department IS NOT NULL
-  AND r.calculated_rental_start_date <= p.period_end
-  AND COALESCE(r.calculated_return_date, p.period_end) >= p.period_start
+AND r.recipient_department IS NOT NULL
+AND r.calculated_rental_start_date <= p.period_end
+AND COALESCE(r.calculated_return_date, p.period_end) >= p.period_start
 GROUP BY r.medical_device_ledger_id, r.recipient_department;
 
 CREATE TEMP TABLE tmp_dominant_department AS
@@ -228,15 +228,15 @@ FROM (
     FROM cur.medical_device_rental_history r
     CROSS JOIN tmp_params p
     WHERE r.medical_device_ledger_id IS NOT NULL
-      AND r.calculated_rental_start_date <= p.period_end
-      AND COALESCE(r.calculated_return_date, p.period_end) >= p.period_start
+    AND r.calculated_rental_start_date <= p.period_end
+    AND COALESCE(r.calculated_return_date, p.period_end) >= p.period_start
     UNION
     SELECT rep.medical_device_ledger_id
     FROM cur.medical_device_repair_history rep
     CROSS JOIN tmp_params p
     WHERE rep.medical_device_ledger_id IS NOT NULL
-      AND rep.calculated_trouble_date <= p.period_end
-      AND COALESCE(rep.calculated_completion_date, p.period_end) >= p.period_start
+    AND rep.calculated_trouble_date <= p.period_end
+    AND COALESCE(rep.calculated_completion_date, p.period_end) >= p.period_start
 ) combined;
 
 WITH classified AS (
@@ -246,10 +246,10 @@ WITH classified AS (
     FROM tmp_device_stationed ds
     JOIN pub.facility_equipment_classification fec
         ON fec.classification_id = ds.classification_id_level1
-       AND fec.classification_level = 1
+        AND fec.classification_level = 1
     CROSS JOIN tmp_params p
     WHERE fec.medical_facility_id = p.facility_id
-      AND fec.classification_name <> '所管外機器'
+    AND fec.classification_name <> '所管外機器'
 ),
 top14 AS (
     SELECT classification_name
@@ -261,7 +261,7 @@ top14 AS (
 )
 SELECT
     CASE WHEN c.classification_name IN (SELECT classification_name FROM top14)
-         THEN c.classification_name ELSE 'その他' END AS category,
+        THEN c.classification_name ELSE 'その他' END AS category,
     COUNT(*) AS n,
     COUNT(*) FILTER (WHERE ad.medical_device_ledger_id IS NOT NULL) AS active_count,
     ROUND(
