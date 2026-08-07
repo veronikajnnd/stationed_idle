@@ -290,3 +290,16 @@ FROM classified c
 LEFT JOIN tmp_active_devices_c5 ad ON ad.medical_device_ledger_id = c.medical_device_ledger_id
 GROUP BY 1
 ORDER BY idle_rate_pct DESC;
+
+-- ADDITION
+SELECT
+    ROUND(
+        (PERCENTILE_CONT(0.5) WITHIN GROUP (
+            ORDER BY EXTRACT(EPOCH FROM (p.as_of_date::timestamp - ds.operation_start_date::timestamp)) / 86400.0 / 365.25
+        ) FILTER (WHERE ds.operation_start_date IS NOT NULL))::numeric,
+        1
+    ) AS overall_median_age_years,
+    COUNT(*) FILTER (WHERE ds.operation_start_date IS NOT NULL) AS n_with_age,
+    COUNT(*) AS total_devices
+FROM tmp_device_stationed ds
+CROSS JOIN tmp_params p;
