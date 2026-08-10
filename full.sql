@@ -145,7 +145,12 @@ SELECT
     CASE
         WHEN ds.manufacturer_name IS NULL THEN '（不明 / unknown）'
         WHEN ds.manufacturer_name IN (SELECT manufacturer_name FROM tmp_manufacturer_top9) THEN ds.manufacturer_name
-        ELSE 'その他'
+        ELSE 'その他 (' || (
+            SELECT COUNT(DISTINCT manufacturer_name)
+            FROM tmp_device_stationed
+            WHERE manufacturer_name IS NOT NULL
+            AND manufacturer_name NOT IN (SELECT manufacturer_name FROM tmp_manufacturer_top9)
+        ) || ' companies)'
     END AS manufacturer,
     COUNT(*) AS devices,
     COUNT(*) FILTER (WHERE ds.is_stationed) AS stationed,
