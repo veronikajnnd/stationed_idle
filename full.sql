@@ -150,12 +150,11 @@ SELECT
     COUNT(*) AS devices,
     COUNT(*) FILTER (WHERE ds.is_stationed) AS stationed,
     ROUND(100.0 * COUNT(*) FILTER (WHERE ds.is_stationed) / COUNT(*), 1) AS stationed_pct,
-    ROUND(
-        (PERCENTILE_CONT(0.5) WITHIN GROUP (
+    FLOOR(
+        PERCENTILE_CONT(0.5) WITHIN GROUP (
             ORDER BY EXTRACT(EPOCH FROM (p.as_of_date::timestamp - ds.operation_start_date::timestamp)) / 86400.0 / 365.25
-        ) FILTER (WHERE ds.operation_start_date IS NOT NULL))::numeric,
-        1
-    ) AS median_age_years,
+        ) FILTER (WHERE ds.operation_start_date IS NOT NULL)
+    )::int AS median_age_years,
     COUNT(*) FILTER (WHERE ds.operation_start_date IS NOT NULL) AS n_with_age
 FROM tmp_device_stationed ds
 CROSS JOIN tmp_params p
