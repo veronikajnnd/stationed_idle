@@ -143,7 +143,7 @@ LIMIT 9;
 
 SELECT
     CASE
-        WHEN ds.manufacturer_name IS NULL THEN '（不明）'
+        WHEN ds.manufacturer_name IS NULL THEN '（不明 / unknown）'
         WHEN ds.manufacturer_name IN (SELECT manufacturer_name FROM tmp_manufacturer_top9) THEN ds.manufacturer_name
         ELSE 'その他'
     END AS manufacturer,
