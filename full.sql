@@ -91,6 +91,7 @@ GROUP BY medical_device_ledger_id;
 CREATE TEMP TABLE tmp_merged_device_location AS
 SELECT medical_device_ledger_id, location, unnest(range_agg(interval)) AS merged_interval
 FROM tmp_committed_intervals
+WHERE location IS NOT NULL AND location <> ''
 GROUP BY medical_device_ledger_id, location;
 
 CREATE TEMP TABLE tmp_location_hours AS
