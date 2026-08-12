@@ -308,3 +308,77 @@ SELECT
     COUNT(*) AS total_devices
 FROM tmp_device_stationed ds
 CROSS JOIN tmp_params p;
+
+-- INVESTIGATING
+-- Kalau humidifier "structurally" jarang dirental sebagai item terpisah,
+-- ini harus kelihatan bahkan di luar periode 6 bulan yang kita pakai.
+SELECT
+    fec.classification_name,
+    COUNT(*) AS total_devices,
+    COUNT(*) FILTER (
+        WHERE NOT EXISTS (
+            SELECT 1 FROM cur.medical_device_rental_history r
+            WHERE r.medical_device_ledger_id = ds.medical_device_ledger_id
+        )
+    ) AS never_rented_ever,
+    COUNT(*) FILTER (
+        WHERE EXISTS (
+            SELECT 1 FROM cur.medical_device_repair_history rep
+            WHERE rep.medical_device_ledger_id = ds.medical_device_ledger_id
+        )
+    ) AS has_repair_history
+FROM tmp_device_stationed ds
+JOIN pub.facility_equipment_classification fec
+    ON fec.classification_id = ds.classification_id_level1
+    AND fec.classification_level = 1
+CROSS JOIN tmp_params p
+WHERE fec.medical_facility_id = p.facility_id
+    AND fec.classification_name IN ('加温加湿器', '人工呼吸器')
+GROUP BY fec.classification_name;
+
+-- INVESTIGATING 2
+-- Kalau humidifier yang idle itu justru "tinggal" di departemen yang sama
+-- (ICU, ruang operasi) dengan ventilator yang lagi aktif, itu petunjuk kuat
+-- mereka fisiknya emang di lokasi yang sama, cuma gak ke-capture rentalnya.
+WITH humidifier_idle AS (
+    SELECT ds.medical_device_ledger_id
+    FROM tmp_device_stationed ds
+    JOIN pub.facility_equipment_classification fec
+        ON fec.classification_id = ds.classification_id_level1
+        AND fec.classification_level = 1
+    CROSS JOIN tmp_params p
+    WHERE fec.medical_facility_id = p.facility_id
+        AND fec.classification_name = '加温加湿器'
+        AND NOT EXISTS (
+            SELECT 1 FROM tmp_active_devices_c5 ad
+            WHERE ad.medical_device_ledger_id = ds.medical_device_ledger_id
+        )
+),
+-- lokasi terakhir yang tercatat untuk humidifier idle ini, dari repair
+-- history (kalau ada) karena rental history-nya kosong per definisi
+humidifier_last_known_location AS (
+    SELECT DISTINCT ON (rep.medical_device_ledger_id)
+        rep.medical_device_ledger_id,
+        rep.user_department
+    FROM cur.medical_device_repair_history rep
+    WHERE rep.medical_device_ledger_id IN (SELECT medical_device_ledger_id FROM humidifier_idle)
+    ORDER BY rep.medical_device_ledger_id, rep.calculated_trouble_date DESC
+),
+ventilator_active_departments AS (
+    SELECT DISTINCT dd.recipient_department
+    FROM tmp_dominant_department dd
+    JOIN tmp_device_stationed ds ON ds.medical_device_ledger_id = dd.medical_device_ledger_id
+    JOIN pub.facility_equipment_classification fec
+        ON fec.classification_id = ds.classification_id_level1
+        AND fec.classification_level = 1
+    CROSS JOIN tmp_params p
+    WHERE fec.medical_facility_id = p.facility_id
+        AND fec.classification_name = '人工呼吸器'
+)
+SELECT
+    hll.user_department AS humidifier_last_location,
+    (hll.user_department IN (SELECT recipient_department FROM ventilator_active_departments)) AS overlaps_with_ventilator_dept,
+    COUNT(*) AS device_count
+FROM humidifier_last_known_location hll
+GROUP BY 1, 2
+ORDER BY device_count DESC;
