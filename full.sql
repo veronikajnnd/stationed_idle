@@ -426,3 +426,39 @@ SELECT
         )
     ) AS humidifiers_overlapping_ventilator
 FROM humidifier_activity ha;
+
+-- INVESTIGATING 4
+-- Versi longgar: humidifier aktif overlap waktu sama ventilator MANAPUN
+-- (gak syarat department sama), untuk lihat apakah masalahnya di
+-- department-matching yang terlalu ketat, atau memang gak overlap sama sekali
+WITH humidifier_activity AS (
+    SELECT ci.medical_device_ledger_id, ci.interval
+    FROM tmp_committed_intervals ci
+    JOIN tmp_device_stationed ds ON ds.medical_device_ledger_id = ci.medical_device_ledger_id
+    JOIN pub.facility_equipment_classification fec
+        ON fec.classification_id = ds.classification_id_level1
+        AND fec.classification_level = 1
+    CROSS JOIN tmp_params p
+    WHERE fec.medical_facility_id = p.facility_id
+        AND fec.classification_name = '加温加湿器'
+),
+ventilator_activity AS (
+    SELECT ci.medical_device_ledger_id, ci.interval
+    FROM tmp_committed_intervals ci
+    JOIN tmp_device_stationed ds ON ds.medical_device_ledger_id = ci.medical_device_ledger_id
+    JOIN pub.facility_equipment_classification fec
+        ON fec.classification_id = ds.classification_id_level1
+        AND fec.classification_level = 1
+    CROSS JOIN tmp_params p
+    WHERE fec.medical_facility_id = p.facility_id
+        AND fec.classification_name = '人工呼吸器'
+)
+SELECT
+    COUNT(DISTINCT ha.medical_device_ledger_id) AS humidifiers_with_activity,
+    COUNT(DISTINCT ha.medical_device_ledger_id) FILTER (
+        WHERE EXISTS (
+            SELECT 1 FROM ventilator_activity va
+            WHERE va.interval && ha.interval  -- waktu overlap doang, department diabaikan
+        )
+    ) AS humidifiers_overlapping_ventilator_any_dept
+FROM humidifier_activity ha;
