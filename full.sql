@@ -382,3 +382,47 @@ SELECT
 FROM humidifier_last_known_location hll
 GROUP BY 1, 2
 ORDER BY device_count DESC;
+
+-- INVESTIGATING 3
+-- Untuk humidifier yang PUNYA committed hours (aktif tercatat), cek apakah
+-- ada ventilator yang aktif di department & periode overlap yang sama.
+WITH humidifier_activity AS (
+    SELECT
+        ci.medical_device_ledger_id,
+        ci.location,
+        ci.interval
+    FROM tmp_committed_intervals ci
+    JOIN tmp_device_stationed ds ON ds.medical_device_ledger_id = ci.medical_device_ledger_id
+    JOIN pub.facility_equipment_classification fec
+        ON fec.classification_id = ds.classification_id_level1
+        AND fec.classification_level = 1
+    CROSS JOIN tmp_params p
+    WHERE fec.medical_facility_id = p.facility_id
+        AND fec.classification_name = '加温加湿器'
+        AND ci.location IS NOT NULL AND ci.location <> ''
+),
+ventilator_activity AS (
+    SELECT
+        ci.medical_device_ledger_id,
+        ci.location,
+        ci.interval
+    FROM tmp_committed_intervals ci
+    JOIN tmp_device_stationed ds ON ds.medical_device_ledger_id = ci.medical_device_ledger_id
+    JOIN pub.facility_equipment_classification fec
+        ON fec.classification_id = ds.classification_id_level1
+        AND fec.classification_level = 1
+    CROSS JOIN tmp_params p
+    WHERE fec.medical_facility_id = p.facility_id
+        AND fec.classification_name = '人工呼吸器'
+        AND ci.location IS NOT NULL AND ci.location <> ''
+)
+SELECT
+    COUNT(DISTINCT ha.medical_device_ledger_id) AS humidifiers_with_activity,
+    COUNT(DISTINCT ha.medical_device_ledger_id) FILTER (
+        WHERE EXISTS (
+            SELECT 1 FROM ventilator_activity va
+            WHERE va.location = ha.location
+              AND va.interval && ha.interval  -- overlap waktu, bukan cuma lokasi
+        )
+    ) AS humidifiers_overlapping_ventilator
+FROM humidifier_activity ha;
