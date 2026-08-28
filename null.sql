@@ -2,6 +2,22 @@ SELECT COUNT(*) AS total_rows,
     -- ROUND(100.0 * COUNT(*) FILTER (WHERE delivery_date IS NULL) / COUNT(*), 1) AS delivery_date_null_pct,
     ROUND(100.0 * COUNT(*) FILTER (WHERE purchase_date IS NULL) / COUNT(*), 1) AS purchase_date_null_pct,
     ROUND(100.0 * COUNT(*) FILTER (WHERE disposal_date IS NULL) / COUNT(*), 1) AS disposal_date_null_pct,
+    -- ROUND(100.0 * COUNT(*) FILTER (WHERE category_minor IS NULL) / COUNT(*), 1) AS category_minor_null_pct,
+    -- ROUND(100.0 * COUNT(*) FILTER (WHERE category_middle IS NULL) / COUNT(*), 1) AS category_middle_null_pct,
+    -- ROUND(100.0 * COUNT(*) FILTER (WHERE category_major IS NULL) / COUNT(*), 1) AS category_major_null_pct,
+    ROUND(100.0 * COUNT(*) FILTER (WHERE classification_id_level1 IS NULL) / COUNT(*), 1) AS category_minor_null_pct,
+    ROUND(100.0 * COUNT(*) FILTER (WHERE classification_id_level2 IS NULL) / COUNT(*), 1) AS category_middle_null_pct,
+    ROUND(100.0 * COUNT(*) FILTER (WHERE classification_id_level3 IS NULL) / COUNT(*), 1) AS category_major_null_pct,
+    -- ROUND(100.0 * COUNT(*) FILTER (WHERE device_number IS NULL) / COUNT(*), 1) AS device_number_null_pct,
+    -- ROUND(100.0 * COUNT(*) FILTER (WHERE client_device_number IS NULL) / COUNT(*), 1) AS client_device_number_null_pct,
+    -- ROUND(100.0 * COUNT(*) FILTER (WHERE operation_start_date IS NULL) / COUNT(*), 1) AS operation_start_date_null_pct,
+    ROUND(100.0 * COUNT(*) FILTER (WHERE manufacturer_name IS NULL) / COUNT(*), 1) AS manufacturer_name_null_pct
+FROM pub.medical_equipment;
+
+SELECT COUNT(*) AS total_rows,
+    ROUND(100.0 * COUNT(*) FILTER (WHERE delivery_date IS NULL) / COUNT(*), 1) AS delivery_date_null_pct,
+    ROUND(100.0 * COUNT(*) FILTER (WHERE purchase_date IS NULL) / COUNT(*), 1) AS purchase_date_null_pct,
+    ROUND(100.0 * COUNT(*) FILTER (WHERE disposal_date IS NULL) / COUNT(*), 1) AS disposal_date_null_pct,
     ROUND(100.0 * COUNT(*) FILTER (WHERE category_minor IS NULL) / COUNT(*), 1) AS category_minor_null_pct,
     ROUND(100.0 * COUNT(*) FILTER (WHERE category_middle IS NULL) / COUNT(*), 1) AS category_middle_null_pct,
     ROUND(100.0 * COUNT(*) FILTER (WHERE category_major IS NULL) / COUNT(*), 1) AS category_major_null_pct,
@@ -9,7 +25,7 @@ SELECT COUNT(*) AS total_rows,
     ROUND(100.0 * COUNT(*) FILTER (WHERE client_device_number IS NULL) / COUNT(*), 1) AS client_device_number_null_pct,
     ROUND(100.0 * COUNT(*) FILTER (WHERE operation_start_date IS NULL) / COUNT(*), 1) AS operation_start_date_null_pct,
     ROUND(100.0 * COUNT(*) FILTER (WHERE manufacturer_name IS NULL) / COUNT(*), 1) AS manufacturer_name_null_pct
-FROM pub.medical_equipment;
+FROM cur.medical_device_ledger;
 
 SELECT COUNT(*) AS total_rows,
     ROUND(100.0 * COUNT(*) FILTER (WHERE trouble_date IS NULL) / COUNT(*), 1) AS trouble_date_null_pct,
