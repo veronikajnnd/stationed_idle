@@ -1,5 +1,4 @@
-SELECT
-    COUNT(*) AS total_rows,
+SELECT COUNT(*) AS total_rows,
     ROUND(100.0 * COUNT(*) FILTER (WHERE delivery_date IS NULL) / COUNT(*), 1) AS delivery_date_null_pct,
     ROUND(100.0 * COUNT(*) FILTER (WHERE purchase_date IS NULL) / COUNT(*), 1) AS purchase_date_null_pct,
     ROUND(100.0 * COUNT(*) FILTER (WHERE disposal_date IS NULL) / COUNT(*), 1) AS disposal_date_null_pct,
@@ -12,8 +11,7 @@ SELECT
     ROUND(100.0 * COUNT(*) FILTER (WHERE manufacturer_name IS NULL) / COUNT(*), 1) AS manufacturer_name_null_pct
 FROM pub.medical_equipment;
 
-SELECT
-    COUNT(*) AS total_rows,
+SELECT COUNT(*) AS total_rows,
     ROUND(100.0 * COUNT(*) FILTER (WHERE trouble_date IS NULL) / COUNT(*), 1) AS trouble_date_null_pct,
     ROUND(100.0 * COUNT(*) FILTER (WHERE completion_date IS NULL) / COUNT(*), 1) AS completion_date_null_pct,
     ROUND(100.0 * COUNT(*) FILTER (WHERE calculated_completion_date IS NULL) / COUNT(*), 1) AS calc_completion_date_null_pct,
@@ -27,8 +25,7 @@ SELECT
     ROUND(100.0 * COUNT(*) FILTER (WHERE category_major IS NULL) / COUNT(*), 1) AS category_major_null_pct
 FROM cur.medical_device_repair_history;
 
-SELECT
-    COUNT(*) AS total_rows,
+SELECT COUNT(*) AS total_rows,
     ROUND(100.0 * COUNT(*) FILTER (WHERE rental_start_date IS NULL) / COUNT(*), 1) AS rental_start_date_null_pct,
     ROUND(100.0 * COUNT(*) FILTER (WHERE return_date IS NULL) / COUNT(*), 1) AS return_date_null_pct,
     ROUND(100.0 * COUNT(*) FILTER (WHERE calculated_return_date IS NULL) / COUNT(*), 1) AS calc_return_date_null_pct,
