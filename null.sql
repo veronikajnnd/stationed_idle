@@ -1,5 +1,5 @@
 SELECT COUNT(*) AS total_rows,
-    ROUND(100.0 * COUNT(*) FILTER (WHERE delivery_date IS NULL) / COUNT(*), 1) AS delivery_date_null_pct,
+    -- ROUND(100.0 * COUNT(*) FILTER (WHERE delivery_date IS NULL) / COUNT(*), 1) AS delivery_date_null_pct,
     ROUND(100.0 * COUNT(*) FILTER (WHERE purchase_date IS NULL) / COUNT(*), 1) AS purchase_date_null_pct,
     ROUND(100.0 * COUNT(*) FILTER (WHERE disposal_date IS NULL) / COUNT(*), 1) AS disposal_date_null_pct,
     ROUND(100.0 * COUNT(*) FILTER (WHERE category_minor IS NULL) / COUNT(*), 1) AS category_minor_null_pct,
