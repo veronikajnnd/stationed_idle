@@ -10,7 +10,7 @@ SELECT
     ROUND(100.0 * COUNT(*) FILTER (WHERE client_device_number IS NULL) / COUNT(*), 1) AS client_device_number_null_pct,
     ROUND(100.0 * COUNT(*) FILTER (WHERE operation_start_date IS NULL) / COUNT(*), 1) AS operation_start_date_null_pct,
     ROUND(100.0 * COUNT(*) FILTER (WHERE manufacturer_name IS NULL) / COUNT(*), 1) AS manufacturer_name_null_pct
-FROM cur.medical_device_ledger;
+FROM pub.medical_equipment;
 
 SELECT
     COUNT(*) AS total_rows,
