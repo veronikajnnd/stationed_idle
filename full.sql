@@ -458,7 +458,7 @@ SELECT
     COUNT(DISTINCT ha.medical_device_ledger_id) FILTER (
         WHERE EXISTS (
             SELECT 1 FROM ventilator_activity va
-            WHERE va.interval && ha.interval  -- waktu overlap doang, department diabaikan
+            WHERE va.interval && ha.interval  -- time overlap only, department being ignored
         )
     ) AS humidifiers_overlapping_ventilator_any_dept
 FROM humidifier_activity ha;
