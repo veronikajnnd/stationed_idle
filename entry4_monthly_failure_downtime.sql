@@ -83,7 +83,7 @@
 -- デモ用の補正#3（0 を 24 に置き換え）が入っている可能性があり、Phase 2
 -- には引き継がない。ただし完了済み修理に限り、検証クエリで突き合わせに使う。
 
--- OUTPUT: writes the fact into pub. Table name is a placeholder — confirm
+-- OUTPUT: writes the fact into cur.
 -- the naming convention with dion/Miyazawa-san before treating it as
 -- final. Swap to INSERT INTO ... (with a matching CREATE TABLE, or
 -- ON CONFLICT logic for a re-run) once this is a recurring job rather
@@ -92,9 +92,9 @@
 -- dion/Miyazawa さんに確認すること。定期実行するジョブになったら、
 -- INSERT INTO ...（対応する CREATE TABLE か、再実行時の ON CONFLICT
 -- 処理つき）に置き換える。
-DROP TABLE IF EXISTS pub.device_monthly_failure_downtime;
+DROP TABLE IF EXISTS cur.monthly_failure_downtime;
 
-CREATE TABLE pub.device_monthly_failure_downtime AS
+CREATE TABLE cur.monthly_failure_downtime AS
 WITH real_failure_repairs AS (
     -- is_real_failure classification, matching the current PoC Superset
     -- metric calculation's "FIXED LOGIC" (2026-09-03 13:45 correction from
