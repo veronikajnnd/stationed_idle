@@ -1,3 +1,8 @@
+-- WARNING: this script DROPs and rebuilds cur.monthly_failure_downtime
+-- running it deletes any existing data in that table without confirmation.
+-- このスクリプトは cur.monthly_failure_downtime を DROP して作り直します。
+-- 実行すると、既存のデータは確認なしに削除されます。
+
 -- Entry 4 (*故障率, failure rate) — vertical slice, definition step
 -- Entry 4（*故障率）— 縦スライス、定義ステップ
 -- ============================================================
@@ -16,7 +21,7 @@
 -- (dataloop-poc repo) — that turned out to have a refactored, current
 -- version, different from the older one this draft started with. See
 -- note below.
--- REVISED 2026-09-03 (14:xx): rebuilt against the REAL cur schema (psql
+-- REVISED 2026-09-03 (14:13): rebuilt against the REAL cur schema (psql
 -- output from streamedixdb), replacing an earlier column-name guess. Two
 -- real changes, not just column renames:
 --   1. trouble_date/completion_date are `date` in the real table (no time
@@ -37,7 +42,7 @@
 -- ダッシュボード用に既に組んであったメトリクス計算（dataloop-poc リポジトリ）
 -- を思い出して照合したところ、より新しいリファクタ済みのロジックだった
 -- （このドラフトの元は古い版）。詳細は下記。
--- 2026-09-03 (14:xx) 修正: 実際の cur スキーマ（streamedixdb の psql 出力）
+-- 2026-09-03 (14:13) 修正: 実際の cur スキーマ（streamedixdb の psql 出力）
 -- に合わせて作り直した。単なるカラム名の置き換えではなく、実質的な変更が
 -- 2点ある:
 --   1. trouble_date/completion_date は実テーブルでは `date` 型（時刻情報
@@ -88,7 +93,7 @@
 -- final. Swap to INSERT INTO ... (with a matching CREATE TABLE, or
 -- ON CONFLICT logic for a re-run) once this is a recurring job rather
 -- than a one-off vertical-slice output.
--- 出力: 結果を pub に書き込む。テーブル名は仮 — 最終的な命名規則は
+-- 出力: 結果を cur に書き込む。テーブル名は仮 — 最終的な命名規則は
 -- dion/Miyazawa さんに確認すること。定期実行するジョブになったら、
 -- INSERT INTO ...（対応する CREATE TABLE か、再実行時の ON CONFLICT
 -- 処理つき）に置き換える。
