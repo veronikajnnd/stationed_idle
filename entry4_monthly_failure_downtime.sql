@@ -1,8 +1,8 @@
--- WARNING: this script DROPs and rebuilds cur.monthly_failure_downtime
+-- WARNING: this script DROPs and rebuilds cur.monthly_failure_downtime —
 -- running it deletes any existing data in that table without confirmation.
--- このスクリプトは cur.monthly_failure_downtime を DROP して作り直します。
--- 実行すると、既存のデータは確認なしに削除されます。
-
+-- 注意: このスクリプトは cur.monthly_failure_downtime を DROP して作り直し
+-- ます。実行すると、既存のデータは確認なしに削除されます。
+-- ============================================================
 -- Entry 4 (*故障率, failure rate) — vertical slice, definition step
 -- Entry 4（*故障率）— 縦スライス、定義ステップ
 -- ============================================================
@@ -21,7 +21,7 @@
 -- (dataloop-poc repo) — that turned out to have a refactored, current
 -- version, different from the older one this draft started with. See
 -- note below.
--- REVISED 2026-09-03 (14:13): rebuilt against the REAL cur schema (psql
+-- REVISED 2026-09-03 (14:xx): rebuilt against the REAL cur schema (psql
 -- output from streamedixdb), replacing an earlier column-name guess. Two
 -- real changes, not just column renames:
 --   1. trouble_date/completion_date are `date` in the real table (no time
@@ -42,7 +42,7 @@
 -- ダッシュボード用に既に組んであったメトリクス計算（dataloop-poc リポジトリ）
 -- を思い出して照合したところ、より新しいリファクタ済みのロジックだった
 -- （このドラフトの元は古い版）。詳細は下記。
--- 2026-09-03 (14:13) 修正: 実際の cur スキーマ（streamedixdb の psql 出力）
+-- 2026-09-03 (14:xx) 修正: 実際の cur スキーマ（streamedixdb の psql 出力）
 -- に合わせて作り直した。単なるカラム名の置き換えではなく、実質的な変更が
 -- 2点ある:
 --   1. trouble_date/completion_date は実テーブルでは `date` 型（時刻情報
@@ -88,13 +88,19 @@
 -- デモ用の補正#3（0 を 24 に置き換え）が入っている可能性があり、Phase 2
 -- には引き継がない。ただし完了済み修理に限り、検証クエリで突き合わせに使う。
 
--- OUTPUT: writes the fact into cur.
--- the naming convention with dion/Miyazawa-san before treating it as
--- final. Swap to INSERT INTO ... (with a matching CREATE TABLE, or
--- ON CONFLICT logic for a re-run) once this is a recurring job rather
--- than a one-off vertical-slice output.
--- 出力: 結果を cur に書き込む。テーブル名は仮 — 最終的な命名規則は
--- dion/Miyazawa さんに確認すること。定期実行するジョブになったら、
+-- OUTPUT: writes the fact into cur.monthly_failure_downtime. CONFIRMED
+-- 2026-09-04 (Miyazawa-san): cur is the original/authoritative schema for
+-- curated facts on-premise produces; pub is only the automatic sync path
+-- from cur onward to RDS, where Superset (dion) reads it filtered by a
+-- user-selected period to compute the failure-rate percentage. Nothing
+-- here writes to pub directly. Swap to INSERT INTO ... (with a matching
+-- CREATE TABLE, or ON CONFLICT logic for a re-run) once this is a
+-- recurring job rather than a one-off vertical-slice output.
+-- 出力: 結果を cur.monthly_failure_downtime に書き込む。2026-09-04
+-- （Miyazawaさん）確認済み: cur はオンプレが作るキュレーション済みfactの
+-- 正本スキーマ。pub は cur から先への自動同期経路にすぎず、RDS側で
+-- Superset（dionさん担当）が期間選択に応じて故障率%を計算する際に読む。
+-- ここから pub へ直接書き込むことはない。定期実行するジョブになったら、
 -- INSERT INTO ...（対応する CREATE TABLE か、再実行時の ON CONFLICT
 -- 処理つき）に置き換える。
 DROP TABLE IF EXISTS cur.monthly_failure_downtime;
@@ -319,3 +325,90 @@ ORDER BY medical_device_ledger_id, month_start;
 --     - EXTRACT(EPOCH FROM (r.calculated_completion_date - r.calculated_trouble_date)) / 3600.0
 -- ) DESC
 -- LIMIT 20;  -- biggest disagreements first
+
+-- ============================================================
+-- DIAGNOSTICS requested in the 2026-09-04 (09:34) review, run BEFORE the
+-- validation above. These are not part of poc_metric_definition.md's
+-- どう確かめるか list (that's cross-checks 1-4 above) — they exist to
+-- scope a data-quality question the review raised: whether the
+-- month-explosion logic lets a very old still-open repair inflate a
+-- single device's row count, before doing the 2-3 device spot-check.
+-- 2026-09-04（09:34）レビューで依頼された診断クエリ。上記の検証より先に
+-- 実行する。poc_metric_definition.md の「どう確かめるか」（検証3/4）とは
+-- 別物 — レビューが指摘したデータ品質の懸念（月展開ロジックが、非常に
+-- 古い未完了修理1件のせいである機器の行数を大きく膨らませていないか）の
+-- 範囲を、2〜3機器のスポットチェックより先に把握するためのもの。
+-- ============================================================
+
+-- Diagnostic A (review point 5): device 2's full month-by-month history.
+-- The round-number hours (720.00 = 30x24, 744.00 = 31x24) on consecutive
+-- months are consistent with a device that was down for whole calendar
+-- months in a row. No LIMIT on purpose — check the LAST row's month_start;
+-- if it reaches 2026-09-01 (the current month), that confirms a repair
+-- that has been open since a very old calculated_trouble_date, still
+-- getting exploded into every month up to today.
+-- 診断A（レビュー指摘5）: 機器2番の全期間の月次履歴。連続する月で
+-- 720.00（=30x24）、744.00（=31x24）というきりの良い時間は、その機器が
+-- 暦月まるごと停止していたことと整合する。意図的にLIMITなし — 最後の行の
+-- month_start を確認する。2026-09-01（今月）まで続いていれば、非常に古い
+-- calculated_trouble_date からずっと未完了のままの修理が、今月まで
+-- 毎月展開され続けていることの裏付けになる。
+SELECT *
+FROM cur.monthly_failure_downtime
+WHERE medical_device_ledger_id = 2
+ORDER BY month_start;
+
+-- Diagnostic B (review point 6): count of unfinished repairs by year of
+-- calculated_trouble_date, across ALL repairs (not filtered to
+-- is_real_failure) — this is the literal scope Miyazawa-san asked for,
+-- since the month-explosion issue is about the source table's still-open
+-- rows in general, not only the ones that pass the failure classification.
+-- Run this FIRST, before any per-device spot-check: a 2-3 device sample
+-- would not have revealed how many rows (and which years) are driving the
+-- explosion.
+-- 診断B（レビュー指摘6）: calculated_trouble_date の年ごとの未完了修理件数。
+-- is_real_failure で絞らず全修理を対象とする — Miyazawaさんの依頼どおりの
+-- 範囲そのまま（月展開の問題は、故障判定を通過した行に限らず、元テーブルの
+-- 未完了行全般の話のため）。機器単位のスポットチェックより先に実行する:
+-- 2〜3機器のサンプルだけでは、どの年のどれだけの行数が膨張の原因かは
+-- わからない。
+SELECT
+    EXTRACT(YEAR FROM calculated_trouble_date) AS trouble_year,
+    COUNT(*) AS n_unfinished_repairs
+FROM cur.medical_device_repair_history
+WHERE
+    is_completed = false
+    OR calculated_completion_date IS NULL
+GROUP BY 1
+ORDER BY 1;
+
+-- Diagnostic B2 (bonus, not literally asked for): same count, scoped to
+-- just the is_real_failure population — this is the subset that actually
+-- explodes into cur.monthly_failure_downtime, so it's a closer proxy for
+-- "how much does this affect entry 4's output specifically" than
+-- Diagnostic B's unscoped count. Worth having both: B answers Miyazawa-san's
+-- question as asked, B2 answers "does this affect entry 4."
+-- 診断B2（おまけ、依頼された範囲ではない）: is_real_failure に絞った
+-- 同じ集計 — cur.monthly_failure_downtime に実際に展開される対象なので、
+-- 「entry 4の出力に具体的にどれだけ影響するか」により近い指標になる。
+-- 診断Bは依頼どおりの範囲への回答、診断B2は「entry 4への影響」への回答、
+-- 両方あった方がよい。
+SELECT
+    EXTRACT(YEAR FROM r.calculated_trouble_date) AS trouble_year,
+    COUNT(*) AS n_unfinished_real_failure_repairs
+FROM cur.medical_device_repair_history r
+WHERE
+    (r.is_completed = false OR r.calculated_completion_date IS NULL)
+    AND r.calculated_trouble_date IS NOT NULL
+    AND (
+        COALESCE(r.failure_reason, '')
+            ~ '動作不良|破損|断線|劣化|不良|修理不能|メーカー修理|オーバーホール'
+        OR COALESCE(r.event_note, '')
+            ~ '動作不良|破損|断線|劣化|不良|修理不能|メーカー修理|オーバーホール'
+    )
+    AND NOT (
+        COALESCE(r.failure_reason, '') ~ '調整|バージョンアップ|特に問題なし|点検'
+        OR COALESCE(r.event_note, '') ~ '調整|バージョンアップ|特に問題なし|点検'
+    )
+GROUP BY 1
+ORDER BY 1;
