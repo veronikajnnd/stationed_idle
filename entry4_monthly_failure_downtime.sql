@@ -103,10 +103,10 @@
 -- ここから pub へ直接書き込むことはない。定期実行するジョブになったら、
 -- INSERT INTO ...（対応する CREATE TABLE か、再実行時の ON CONFLICT
 -- 処理つき）に置き換える。
-DROP TABLE IF EXISTS cur.monthly_failure_downtime;
+-- DROP TABLE IF EXISTS cur.monthly_failure_downtime;
 
-CREATE TABLE cur.monthly_failure_downtime AS
-WITH real_failure_repairs AS (
+-- CREATE TABLE cur.monthly_failure_downtime AS
+-- WITH real_failure_repairs AS (
     -- is_real_failure classification, matching the current PoC Superset
     -- metric calculation's "FIXED LOGIC" (2026-09-03 13:45 correction from
     -- an older version this draft started with). See
@@ -116,30 +116,30 @@ WITH real_failure_repairs AS (
     -- is_real_failure の判定は、PoC Superset のメトリクス計算にある
     -- 現行の「FIXED LOGIC」に合わせている（詳細は poc_metric_definition.md
     -- の entry 4/10）。
-    SELECT
-        r.medical_device_ledger_id,
-        r.calculated_trouble_date,
-        r.calculated_completion_date,
-        r.is_completed,
-        r.calculated_downtime_hours,
-        r.is_failure AS curated_is_failure,
-        r.repair_classification AS curated_repair_classification
-    FROM cur.medical_device_repair_history r
-    WHERE
-        r.calculated_trouble_date IS NOT NULL
-        AND (
-            COALESCE(r.failure_reason, '')
-                ~ '動作不良|破損|断線|劣化|不良|修理不能|メーカー修理|オーバーホール'
-            OR COALESCE(r.event_note, '')
-                ~ '動作不良|破損|断線|劣化|不良|修理不能|メーカー修理|オーバーホール'
-        )
-        AND NOT (
-            COALESCE(r.failure_reason, '')
-                ~ '調整|バージョンアップ|特に問題なし|点検'
-            OR COALESCE(r.event_note, '')
-                ~ '調整|バージョンアップ|特に問題なし|点検'
-        )
-),
+--     SELECT
+--         r.medical_device_ledger_id,
+--         r.calculated_trouble_date,
+--         r.calculated_completion_date,
+--         r.is_completed,
+--         r.calculated_downtime_hours,
+--         r.is_failure AS curated_is_failure,
+--         r.repair_classification AS curated_repair_classification
+--     FROM cur.medical_device_repair_history r
+--     WHERE
+--         r.calculated_trouble_date IS NOT NULL
+--         AND (
+--             COALESCE(r.failure_reason, '')
+--                 ~ '動作不良|破損|断線|劣化|不良|修理不能|メーカー修理|オーバーホール'
+--             OR COALESCE(r.event_note, '')
+--                 ~ '動作不良|破損|断線|劣化|不良|修理不能|メーカー修理|オーバーホール'
+--         )
+--         AND NOT (
+--             COALESCE(r.failure_reason, '')
+--                 ~ '調整|バージョンアップ|特に問題なし|点検'
+--             OR COALESCE(r.event_note, '')
+--                 ~ '調整|バージョンアップ|特に問題なし|点検'
+--         )
+-- ),
 
 -- One row per (repair, calendar month it touches). A still-open repair
 -- (is_completed = false, or calculated_completion_date IS NULL) is treated
@@ -151,30 +151,30 @@ WITH real_failure_repairs AS (
 -- calculated_trouble_date から今月まで、すべての月に触れているとみなす。
 -- 各月の時間は「未完了レコードのルール」（2026-09-03）で、それぞれの月末
 -- で切る。
-repair_months AS (
-    SELECT
-        f.medical_device_ledger_id,
-        f.calculated_trouble_date,
-        f.calculated_completion_date,
-        f.is_completed,
-        f.calculated_downtime_hours,
-        f.curated_is_failure,
-        f.curated_repair_classification,
-        gs.month_start::date AS month_start,
-        (gs.month_start + interval '1 month')::timestamp AS month_end
-    FROM real_failure_repairs f
-    CROSS JOIN LATERAL generate_series(
-        date_trunc('month', f.calculated_trouble_date),
-        date_trunc(
-            'month',
-            COALESCE(
-                CASE WHEN f.is_completed THEN f.calculated_completion_date END,
-                CURRENT_DATE
-            )
-        ),
-        interval '1 month'
-    ) AS gs(month_start)
-),
+-- repair_months AS (
+--     SELECT
+--         f.medical_device_ledger_id,
+--         f.calculated_trouble_date,
+--         f.calculated_completion_date,
+--         f.is_completed,
+--         f.calculated_downtime_hours,
+--         f.curated_is_failure,
+--         f.curated_repair_classification,
+--         gs.month_start::date AS month_start,
+--         (gs.month_start + interval '1 month')::timestamp AS month_end
+--     FROM real_failure_repairs f
+--     CROSS JOIN LATERAL generate_series(
+--         date_trunc('month', f.calculated_trouble_date),
+--         date_trunc(
+--             'month',
+--             COALESCE(
+--                 CASE WHEN f.is_completed THEN f.calculated_completion_date END,
+--                 CURRENT_DATE
+--             )
+--         ),
+--         interval '1 month'
+--     ) AS gs(month_start)
+-- ),
 
 -- Downtime hours attributable to each month: the overlap between
 -- [calculated_trouble_date, effective_end] and [month_start, month_end),
@@ -187,39 +187,39 @@ repair_months AS (
 -- effective_end は、その月の月末とする（2026-09-03 の「未完了レコードの
 -- ルール」。オンプレの集計粒度が月固定のため、ダッシュボードの期間単位
 -- ではなく月単位で適用）。
-downtime_by_month AS (
-    SELECT
-        medical_device_ledger_id,
-        month_start,
-        is_completed,
-        calculated_downtime_hours,
-        curated_is_failure,
-        curated_repair_classification,
-        GREATEST(
-            0,
-            EXTRACT(
-                EPOCH FROM (
-                    LEAST(
-                        month_end,
-                        CASE
-                            WHEN is_completed THEN COALESCE(calculated_completion_date, month_end)
-                            ELSE LEAST(month_end, CURRENT_TIMESTAMP)
-                        END
-                    )
-                    - GREATEST(month_start::timestamp, calculated_trouble_date)
-                )
-            ) / 3600.0
-        ) AS downtime_hours
-    FROM repair_months
-)
+-- downtime_by_month AS (
+--     SELECT
+--         medical_device_ledger_id,
+--         month_start,
+--         is_completed,
+--         calculated_downtime_hours,
+--         curated_is_failure,
+--         curated_repair_classification,
+--         GREATEST(
+--             0,
+--             EXTRACT(
+--                 EPOCH FROM (
+--                     LEAST(
+--                         month_end,
+--                         CASE
+--                             WHEN is_completed THEN COALESCE(calculated_completion_date, month_end)
+--                             ELSE LEAST(month_end, CURRENT_TIMESTAMP)
+--                         END
+--                     )
+--                     - GREATEST(month_start::timestamp, calculated_trouble_date)
+--                 )
+--             ) / 3600.0
+--         ) AS downtime_hours
+--     FROM repair_months
+-- )
 
-SELECT
-    medical_device_ledger_id,
-    month_start,
-    ROUND(SUM(downtime_hours)::numeric, 2) AS downtime_hours
-FROM downtime_by_month
-GROUP BY medical_device_ledger_id, month_start
-ORDER BY medical_device_ledger_id, month_start;
+-- SELECT
+--     medical_device_ledger_id,
+--     month_start,
+--     ROUND(SUM(downtime_hours)::numeric, 2) AS downtime_hours
+-- FROM downtime_by_month
+-- GROUP BY medical_device_ledger_id, month_start
+-- ORDER BY medical_device_ledger_id, month_start;
 
 -- VALIDATION (per poc_metric_definition.md entry 4's どう確かめるか):
 --   1. Pick 2-3 real medical_device_ledger_id values with known repairs,
@@ -265,26 +265,26 @@ ORDER BY medical_device_ledger_id, month_start;
 -- 検証3: 再計算した is_real_failure と、キュレーション済み is_failure の
 -- 突き合わせ（完了済みのみ）。上記のCTEに依存しない単独クエリ — 別途実行する。
 --
--- SELECT
---     r.is_failure AS curated_is_failure,
---     (
---         r.calculated_trouble_date IS NOT NULL
---         AND (
---             COALESCE(r.failure_reason, '')
---                 ~ '動作不良|破損|断線|劣化|不良|修理不能|メーカー修理|オーバーホール'
---             OR COALESCE(r.event_note, '')
---                 ~ '動作不良|破損|断線|劣化|不良|修理不能|メーカー修理|オーバーホール'
---         )
---         AND NOT (
---             COALESCE(r.failure_reason, '') ~ '調整|バージョンアップ|特に問題なし|点検'
---             OR COALESCE(r.event_note, '') ~ '調整|バージョンアップ|特に問題なし|点検'
---         )
---     ) AS recomputed_is_real_failure,
---     COUNT(*) AS n_repairs
--- FROM cur.medical_device_repair_history r
--- WHERE r.is_completed = true
--- GROUP BY 1, 2
--- ORDER BY 1, 2;
+SELECT
+    r.is_failure AS curated_is_failure,
+    (
+        r.calculated_trouble_date IS NOT NULL
+        AND (
+            COALESCE(r.failure_reason, '')
+                ~ '動作不良|破損|断線|劣化|不良|修理不能|メーカー修理|オーバーホール'
+            OR COALESCE(r.event_note, '')
+                ~ '動作不良|破損|断線|劣化|不良|修理不能|メーカー修理|オーバーホール'
+        )
+        AND NOT (
+            COALESCE(r.failure_reason, '') ~ '調整|バージョンアップ|特に問題なし|点検'
+            OR COALESCE(r.event_note, '') ~ '調整|バージョンアップ|特に問題なし|点検'
+        )
+    ) AS recomputed_is_real_failure,
+    COUNT(*) AS n_repairs
+FROM cur.medical_device_repair_history r
+WHERE r.is_completed = true
+GROUP BY 1, 2
+ORDER BY 1, 2;
 --
 -- Read the 4-row result as a 2x2: curated=true/recomputed=true and
 -- curated=false/recomputed=false are agreement; the other two rows are
@@ -298,33 +298,33 @@ ORDER BY medical_device_ledger_id, month_start;
 -- 検証4: このクエリの1件あたり合計と calculated_downtime_hours の突き合わせ
 -- （完了済みかつ真の故障のみ）。単独クエリ — 別途実行する。
 --
--- SELECT
---     r.medical_device_ledger_id,
---     r.calculated_trouble_date,
---     r.calculated_completion_date,
---     r.calculated_downtime_hours AS existing_column_hours,
---     ROUND(
---         (EXTRACT(EPOCH FROM (r.calculated_completion_date - r.calculated_trouble_date)) / 3600.0)
---     ::numeric, 2) AS recomputed_hours_straight_diff
--- FROM cur.medical_device_repair_history r
--- WHERE
---     r.is_completed = true
---     AND r.calculated_trouble_date IS NOT NULL
---     AND (
---         COALESCE(r.failure_reason, '')
---             ~ '動作不良|破損|断線|劣化|不良|修理不能|メーカー修理|オーバーホール'
---         OR COALESCE(r.event_note, '')
---             ~ '動作不良|破損|断線|劣化|不良|修理不能|メーカー修理|オーバーホール'
---     )
---     AND NOT (
---         COALESCE(r.failure_reason, '') ~ '調整|バージョンアップ|特に問題なし|点検'
---         OR COALESCE(r.event_note, '') ~ '調整|バージョンアップ|特に問題なし|点検'
---     )
--- ORDER BY ABS(
---     COALESCE(r.calculated_downtime_hours, 0)
---     - EXTRACT(EPOCH FROM (r.calculated_completion_date - r.calculated_trouble_date)) / 3600.0
--- ) DESC
--- LIMIT 20;  -- biggest disagreements first
+SELECT
+    r.medical_device_ledger_id,
+    r.calculated_trouble_date,
+    r.calculated_completion_date,
+    r.calculated_downtime_hours AS existing_column_hours,
+    ROUND(
+        (EXTRACT(EPOCH FROM (r.calculated_completion_date - r.calculated_trouble_date)) / 3600.0)
+    ::numeric, 2) AS recomputed_hours_straight_diff
+FROM cur.medical_device_repair_history r
+WHERE
+    r.is_completed = true
+    AND r.calculated_trouble_date IS NOT NULL
+    AND (
+        COALESCE(r.failure_reason, '')
+            ~ '動作不良|破損|断線|劣化|不良|修理不能|メーカー修理|オーバーホール'
+        OR COALESCE(r.event_note, '')
+            ~ '動作不良|破損|断線|劣化|不良|修理不能|メーカー修理|オーバーホール'
+    )
+    AND NOT (
+        COALESCE(r.failure_reason, '') ~ '調整|バージョンアップ|特に問題なし|点検'
+        OR COALESCE(r.event_note, '') ~ '調整|バージョンアップ|特に問題なし|点検'
+    )
+ORDER BY ABS(
+    COALESCE(r.calculated_downtime_hours, 0)
+    - EXTRACT(EPOCH FROM (r.calculated_completion_date - r.calculated_trouble_date)) / 3600.0
+) DESC
+LIMIT 20;  -- biggest disagreements first
 
 -- ============================================================
 -- DIAGNOSTICS requested in the 2026-09-04 (09:34) review, run BEFORE the
@@ -353,10 +353,10 @@ ORDER BY medical_device_ledger_id, month_start;
 -- month_start を確認する。2026-09-01（今月）まで続いていれば、非常に古い
 -- calculated_trouble_date からずっと未完了のままの修理が、今月まで
 -- 毎月展開され続けていることの裏付けになる。
-SELECT *
-FROM cur.monthly_failure_downtime
-WHERE medical_device_ledger_id = 2
-ORDER BY month_start;
+-- SELECT *
+-- FROM cur.monthly_failure_downtime
+-- WHERE medical_device_ledger_id = 2
+-- ORDER BY month_start;
 
 -- Diagnostic B (review point 6): count of unfinished repairs by year of
 -- calculated_trouble_date, across ALL repairs (not filtered to
@@ -372,15 +372,15 @@ ORDER BY month_start;
 -- 未完了行全般の話のため）。機器単位のスポットチェックより先に実行する:
 -- 2〜3機器のサンプルだけでは、どの年のどれだけの行数が膨張の原因かは
 -- わからない。
-SELECT
-    EXTRACT(YEAR FROM calculated_trouble_date) AS trouble_year,
-    COUNT(*) AS n_unfinished_repairs
-FROM cur.medical_device_repair_history
-WHERE
-    is_completed = false
-    OR calculated_completion_date IS NULL
-GROUP BY 1
-ORDER BY 1;
+-- SELECT
+--     EXTRACT(YEAR FROM calculated_trouble_date) AS trouble_year,
+--     COUNT(*) AS n_unfinished_repairs
+-- FROM cur.medical_device_repair_history
+-- WHERE
+--     is_completed = false
+--     OR calculated_completion_date IS NULL
+-- GROUP BY 1
+-- ORDER BY 1;
 
 -- Diagnostic B2 (bonus, not literally asked for): same count, scoped to
 -- just the is_real_failure population — this is the subset that actually
@@ -393,22 +393,22 @@ ORDER BY 1;
 -- 「entry 4の出力に具体的にどれだけ影響するか」により近い指標になる。
 -- 診断Bは依頼どおりの範囲への回答、診断B2は「entry 4への影響」への回答、
 -- 両方あった方がよい。
-SELECT
-    EXTRACT(YEAR FROM r.calculated_trouble_date) AS trouble_year,
-    COUNT(*) AS n_unfinished_real_failure_repairs
-FROM cur.medical_device_repair_history r
-WHERE
-    (r.is_completed = false OR r.calculated_completion_date IS NULL)
-    AND r.calculated_trouble_date IS NOT NULL
-    AND (
-        COALESCE(r.failure_reason, '')
-            ~ '動作不良|破損|断線|劣化|不良|修理不能|メーカー修理|オーバーホール'
-        OR COALESCE(r.event_note, '')
-            ~ '動作不良|破損|断線|劣化|不良|修理不能|メーカー修理|オーバーホール'
-    )
-    AND NOT (
-        COALESCE(r.failure_reason, '') ~ '調整|バージョンアップ|特に問題なし|点検'
-        OR COALESCE(r.event_note, '') ~ '調整|バージョンアップ|特に問題なし|点検'
-    )
-GROUP BY 1
-ORDER BY 1;
+-- SELECT
+--     EXTRACT(YEAR FROM r.calculated_trouble_date) AS trouble_year,
+--     COUNT(*) AS n_unfinished_real_failure_repairs
+-- FROM cur.medical_device_repair_history r
+-- WHERE
+--     (r.is_completed = false OR r.calculated_completion_date IS NULL)
+--     AND r.calculated_trouble_date IS NOT NULL
+--     AND (
+--         COALESCE(r.failure_reason, '')
+--             ~ '動作不良|破損|断線|劣化|不良|修理不能|メーカー修理|オーバーホール'
+--         OR COALESCE(r.event_note, '')
+--             ~ '動作不良|破損|断線|劣化|不良|修理不能|メーカー修理|オーバーホール'
+--     )
+--     AND NOT (
+--         COALESCE(r.failure_reason, '') ~ '調整|バージョンアップ|特に問題なし|点検'
+--         OR COALESCE(r.event_note, '') ~ '調整|バージョンアップ|特に問題なし|点検'
+--     )
+-- GROUP BY 1
+-- ORDER BY 1;
