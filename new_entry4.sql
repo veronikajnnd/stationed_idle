@@ -267,7 +267,7 @@ downtime_by_month AS (
                         month_end,
                         CASE
                             WHEN is_completed THEN COALESCE(calculated_completion_date, month_end)
-                            ELSE month_end
+                            ELSE LEAST(month_end, CURRENT_TIMESTAMP)
                         END
                     )
                     - GREATEST(month_start::timestamp, calculated_trouble_date)
