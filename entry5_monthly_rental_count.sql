@@ -1,6 +1,6 @@
--- WARNING: this script DROPs and rebuilds cur.monthly_rental_count_fact —
+-- WARNING: this script DROPs and rebuilds cur.monthly_rental_count —
 -- running it deletes any existing data in that table without confirmation.
--- 注意: このスクリプトは cur.monthly_rental_count_fact を DROP して作り直し
+-- 注意: このスクリプトは cur.monthly_rental_count を DROP して作り直し
 -- ます。実行すると、既存のデータは確認なしに削除されます。
 -- ============================================================
 -- Entry 5 (*機器別貸出回数[FIXED], rentals per unit) — vertical slice, draft
@@ -119,10 +119,10 @@
 --     -- 下記のOption A（月をまたぐ貸出が1回だけカウントされることの
 --     確認）で検証する。
 --
--- OUTPUT: writes the fact into cur.monthly_rental_count_fact, mirroring
+-- OUTPUT: writes the fact into cur.monthly_rental_count, mirroring
 -- entry 4's cur/pub split (CONFIRMED 2026-09-04 for entry 4, assumed to
 -- apply the same way here -- not yet separately confirmed for entry 5).
--- 出力: 結果を cur.monthly_rental_count_fact に書き込む。entry 4 の
+-- 出力: 結果を cur.monthly_rental_count に書き込む。entry 4 の
 -- cur/pub分離（2026-09-04確認済み）に倣う想定 -- entry 5について個別に
 -- 確認したわけではない。
 
@@ -138,47 +138,47 @@
 -- null の行数を見る。食い違いがほぼゼロなら calculated_* を使うかどうかは
 -- ほぼ影響しない。多ければ、どちらかを信頼する前に理由を理解する価値がある。
 -- ============================================================
-SELECT
-    COUNT(*) FILTER (
-        WHERE rental_start_date IS NOT NULL
-          AND calculated_rental_start_date IS NOT NULL
-          AND rental_start_date <> calculated_rental_start_date
-    ) AS start_date_disagrees,
-    COUNT(*) FILTER (
-        WHERE (rental_start_date IS NULL) <> (calculated_rental_start_date IS NULL)
-    ) AS start_date_null_mismatch,
-    COUNT(*) FILTER (
-        WHERE return_date IS NOT NULL
-          AND calculated_return_date IS NOT NULL
-          AND return_date <> calculated_return_date
-    ) AS return_date_disagrees,
-    COUNT(*) FILTER (
-        WHERE (return_date IS NULL) <> (calculated_return_date IS NULL)
-    ) AS return_date_null_mismatch,
-    COUNT(*) AS total_rows
-FROM cur.medical_device_rental_history;
-
--- DROP TABLE IF EXISTS cur.monthly_rental_count_fact;
-
--- CREATE TABLE cur.monthly_rental_count_fact AS
 -- SELECT
---     r.client_device_number,
---     r.medical_facility_id,
---     r.medical_facility_name,
---     r.recipient_department,
---     date_trunc('month', r.calculated_rental_start_date)::date AS month_start,
---     COUNT(*) AS rental_count
--- FROM cur.medical_device_rental_history r
--- WHERE r.calculated_rental_start_date IS NOT NULL
--- GROUP BY
---     r.client_device_number,
---     r.medical_facility_id,
---     r.medical_facility_name,
---     r.recipient_department,
---     date_trunc('month', r.calculated_rental_start_date)
--- ORDER BY
---     r.client_device_number,
---     month_start;
+--     COUNT(*) FILTER (
+--         WHERE rental_start_date IS NOT NULL
+--           AND calculated_rental_start_date IS NOT NULL
+--           AND rental_start_date <> calculated_rental_start_date
+--     ) AS start_date_disagrees,
+--     COUNT(*) FILTER (
+--         WHERE (rental_start_date IS NULL) <> (calculated_rental_start_date IS NULL)
+--     ) AS start_date_null_mismatch,
+--     COUNT(*) FILTER (
+--         WHERE return_date IS NOT NULL
+--           AND calculated_return_date IS NOT NULL
+--           AND return_date <> calculated_return_date
+--     ) AS return_date_disagrees,
+--     COUNT(*) FILTER (
+--         WHERE (return_date IS NULL) <> (calculated_return_date IS NULL)
+--     ) AS return_date_null_mismatch,
+--     COUNT(*) AS total_rows
+-- FROM cur.medical_device_rental_history;
+
+DROP TABLE IF EXISTS cur.monthly_rental_count;
+
+CREATE TABLE cur.monthly_rental_count AS
+SELECT
+    r.client_device_number,
+    r.medical_facility_id,
+    r.medical_facility_name,
+    r.recipient_department,
+    date_trunc('month', r.calculated_rental_start_date)::date AS month_start,
+    COUNT(*) AS rental_count
+FROM cur.medical_device_rental_history r
+WHERE r.calculated_rental_start_date IS NOT NULL
+GROUP BY
+    r.client_device_number,
+    r.medical_facility_id,
+    r.medical_facility_name,
+    r.recipient_department,
+    date_trunc('month', r.calculated_rental_start_date)
+ORDER BY
+    r.client_device_number,
+    month_start;
 
 -- VALIDATION (per poc_metric_definition.md entry 5's どう確かめるか,
 -- recommendation: B first, cheap and catches systemic bugs, then A on a
@@ -198,7 +198,7 @@ FROM cur.medical_device_rental_history;
 -- 重複したりしていないかの確認。期間フィルタ自体はSupersetの仕事なのでここ
 -- では扱わない。
 SELECT
-    (SELECT SUM(rental_count) FROM cur.monthly_rental_count_fact) AS fact_table_total,
+    (SELECT SUM(rental_count) FROM cur.monthly_rental_count) AS table_total,
     (SELECT COUNT(*) FROM cur.medical_device_rental_history WHERE calculated_rental_start_date IS NOT NULL) AS source_table_total;
 
 -- Option A: manual spot-check, 5-10 sample devices including at least one
@@ -215,12 +215,12 @@ SELECT
 -- samples.
 -- ステップ1: 月をまたぐ貸出がある機器を、サンプルの1つとして探す。
 --
--- SELECT client_device_number, calculated_rental_start_date, calculated_return_date
--- FROM cur.medical_device_rental_history
--- WHERE
---     calculated_return_date IS NOT NULL
---     AND date_trunc('month', calculated_rental_start_date) <> date_trunc('month', calculated_return_date)
--- LIMIT 10;
+SELECT client_device_number, calculated_rental_start_date, calculated_return_date
+FROM cur.medical_device_rental_history
+WHERE
+    calculated_return_date IS NOT NULL
+    AND date_trunc('month', calculated_rental_start_date) <> date_trunc('month', calculated_return_date)
+LIMIT 10;
 --
 -- Step 2: for each sampled client_device_number, compare the fact table's
 -- per-month counts against a manual count from the raw table.
