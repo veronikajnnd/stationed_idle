@@ -1,0 +1,197 @@
+-- WARNING: this script DROPs and rebuilds cur.monthly_rental_count —
+-- running it deletes any existing data in that table without confirmation.
+-- 注意: このスクリプトは cur.monthly_rental_count を DROP して作り直し
+-- ます。実行すると、既存のデータは確認なしに削除されます。
+-- ============================================================
+-- Entry 5 (*機器別貸出回数[FIXED], rentals per unit) — vertical slice, draft
+-- Entry 5（*機器別貸出回数[FIXED]）— 縦スライス、ドラフト
+-- ============================================================
+-- Output: device x hospital x department x month fact table of rental
+-- counts. Unlike entry 4 (a duration that can span, and be split across,
+-- multiple months), a rental COUNT is a single discrete event -- it is
+-- bucketed into the one month it started in, not exploded across every
+-- month it touches. See poc_metric_definition.md, entry 5, for the current
+-- decision trail.
+-- 出力: 機器 x 病院 x 部署 x 月ごとの貸出回数のfactテーブル。entry 4
+-- （複数月にまたがり得る、分割が必要な「時間」）と違い、貸出回数は1回起きた
+-- ら1回の離散イベント -- 開始した月1つだけに割り当てる。触れた月すべてに
+-- 展開する entry 4 のロジックとは異なる。詳しい経緯は
+-- poc_metric_definition.md の entry 5 を参照。
+--
+-- STATUS: this file's grouping/rules follow poc_metric_definition.md
+-- entry 5's Phase2 の定義, which is still marked "draft, pending
+-- confirmation" there -- unlike entry 4/9/10/11, this has NOT yet been
+-- through a Miyazawa-san review cycle. Treat this SQL as a first pass to
+-- validate against, not yet something to trust for a real number.
+-- ステータス: このファイルの集計方法は poc_metric_definition.md の entry 5
+-- 「Phase2 の定義」に沿っているが、そこはまだ「draft, pending
+-- confirmation」のまま -- entry 4/9/10/11と違い、まだMiyazawaさんのレビュー
+-- を一度も通っていない。このSQLは検証用の第一版であり、まだ本物の数字として
+-- 信頼できる段階ではない。
+--
+-- SCHEMA NOT YET VERIFIED AGAINST THE REAL SERVER: column names below
+-- (rental_start_date, return_date, recipient_department, client_device_number)
+-- are taken from poc_metric_definition.md entry 5's 入力 row, which itself
+-- came from the generated-doc analysis, not a direct information_schema
+-- check on cur.medical_device_rental_history -- entry 4's first draft had
+-- the same kind of gap and needed real-schema corrections on 2026-09-03.
+-- Run the schema-check query below FIRST, before the DROP/CREATE, and
+-- confirm/correct column names (especially the hospital identifier, not
+-- captured in entry 5's 入力 row at all, and the rental record's own primary
+-- key, referred to as "rental_id" in the Phase2 定義 but not confirmed as a
+-- real column name) before trusting the rest of this file.
+-- 実サーバーのスキーマ未確認: 下記のカラム名（rental_start_date,
+-- return_date, recipient_department, client_device_number）は
+-- poc_metric_definition.md の entry 5「入力」欄（生成ドキュメント分析由来）
+-- からのもので、cur.medical_device_rental_history に対する
+-- information_schema での直接確認はまだしていない -- entry 4 の初版も同種の
+-- ギャップがあり、2026-09-03 に実スキーマでの修正が必要だった。下記の
+-- スキーマ確認クエリを DROP/CREATE より先に実行し、カラム名（特に、
+-- entry 5「入力」欄に一切出てこない病院識別子と、Phase2定義で
+-- 「rental_id」と呼ばれているが実カラム名として未確認のレコード自身の
+-- 主キー）を確認/修正してから、このファイルの残りを信頼すること。
+--
+-- ASSUMPTIONS STILL TO VERIFY BEFORE RUNNING:
+--   - Hospital identifier column: not listed in entry 5's own 入力 row at
+--     all. Guessing medical_facility_id/medical_facility_name, by analogy
+--     with cur.medical_device_repair_history's columns (confirmed present
+--     there via information_schema during task11) -- NOT confirmed present
+--     on cur.medical_device_rental_history specifically.
+--   - client_device_number vs 管理No: entry 5's own note says "管理No maps
+--     to client_device_number (assumed), pending Miyazawa-san's explicit
+--     confirmation" -- not yet confirmed, though client_device_number's
+--     100% fill rate (vs device_number's 0%) makes it the only usable
+--     candidate regardless of the naming question.
+--   - Rental record primary key: Phase2 の定義 writes "COUNT(rental_id)" but
+--     entry 5's 入力 row never names an actual PK column -- guessing
+--     COUNT(*) is equivalent (one row = one rental record) unless the real
+--     table has a different grain (e.g. one row per day of an active
+--     rental, which would make COUNT(*) wrong and COUNT(DISTINCT
+--     rental_id) necessary instead).
+--   - "One count per rental record regardless of month span" (Phase2 の
+--     定義) is implemented here as: bucket by the month rental_start_date
+--     falls in, full stop -- no split, no second row for the return month.
+--     This is a reading of the draft definition, not something
+--     Miyazawa-san has confirmed as the intended semantics yet.
+--   - A still-open rental (return_date IS NULL) still counts as 1, per the
+--     general still-open record rule (poc_metric_definition.md Process
+--     note) and entry 5's own 2026-09-03 confirmation that this metric
+--     already matches that rule without needing a revision.
+-- 実行前に確認すべき前提:
+--   - 病院識別子カラム: entry 5 自身の「入力」欄には一切出てこない。
+--     cur.medical_device_repair_history にある medical_facility_id /
+--     medical_facility_name（task11でinformation_schema確認済み）からの
+--     類推 -- cur.medical_device_rental_history に実在するかは未確認。
+--   - client_device_number と 管理No の対応: entry 5 自身のメモに「管理No
+--     は client_device_number に対応すると仮定、Miyazawaさんの明示確認待ち」
+--     とある -- まだ未確認。ただし client_device_number の充足率100%
+--     （device_number は0%）を考えると、命名の対応関係にかかわらず使える
+--     候補はこちらしかない。
+--   - 貸出履歴の主キー: Phase2の定義には「COUNT(rental_id)」とあるが、
+--     entry 5「入力」欄には実際のPKカラム名が出てこない -- COUNT(*) が
+--     同等（1行=1貸出記録）と仮定しているが、もし実テーブルの粒度が違う
+--     （例: 貸出中の1日ごとに1行など）場合は COUNT(*) では誤りで、
+--     COUNT(DISTINCT rental_id) が必要になる。
+--   - 「月をまたいでも貸出記録1件につき1カウント」（Phase2の定義）は、ここ
+--     では rental_start_date が属する月にそのまま割り当てる実装にした --
+--     分割なし、返却月への2行目もなし。これはドラフト定義の一つの解釈で
+--     あり、Miyazawaさんが意図した意味として確認済みではない。
+--   - まだ完了していない貸出（return_date が NULL）も1件としてカウントする
+--     -- 一般的な未完了レコードのルール（poc_metric_definition.md の
+--     Process note）と、entry 5 自身の2026-09-03の確認（このルールに既に
+--     合致しており改訂不要）による。
+--
+-- OUTPUT: writes the fact into cur.monthly_rental_count, mirroring
+-- entry 4's cur/pub split (CONFIRMED 2026-09-04 for entry 4, assumed to
+-- apply the same way here -- not yet separately confirmed for entry 5).
+-- 出力: 結果を cur.monthly_rental_count に書き込む。entry 4 の
+-- cur/pub分離（2026-09-04確認済み）に倣う想定 -- entry 5について個別に
+-- 確認したわけではない。
+
+-- ============================================================
+-- SCHEMA CHECK -- run this FIRST, before the DROP/CREATE below, and correct
+-- any column name assumed above that doesn't match the real result.
+-- スキーマ確認 -- 下記のDROP/CREATEより先にこれを実行し、上で仮定した
+-- カラム名のうち実際と違うものを修正すること。
+-- ============================================================
+-- SELECT column_name, data_type, is_nullable
+-- FROM information_schema.columns
+-- WHERE table_schema = 'cur' AND table_name = 'medical_device_rental_history'
+-- ORDER BY ordinal_position;
+
+DROP TABLE IF EXISTS cur.monthly_rental_count;
+
+CREATE TABLE cur.monthly_rental_count AS
+SELECT
+    r.client_device_number,
+    r.medical_facility_id,
+    r.medical_facility_name,
+    r.recipient_department,
+    date_trunc('month', r.rental_start_date)::date AS month_start,
+    COUNT(*) AS rental_count
+FROM cur.medical_device_rental_history r
+WHERE r.rental_start_date IS NOT NULL
+GROUP BY
+    r.client_device_number,
+    r.medical_facility_id,
+    r.medical_facility_name,
+    r.recipient_department,
+    date_trunc('month', r.rental_start_date)
+ORDER BY
+    r.client_device_number,
+    month_start;
+
+-- VALIDATION (per poc_metric_definition.md entry 5's どう確かめるか,
+-- recommendation: B first, cheap and catches systemic bugs, then A on a
+-- handful of devices):
+-- 検証（poc_metric_definition.md の entry 5「どう確かめるか」に対応。
+-- 推奨順: まずB（安価で、join/dedupの系統的なバグを捉えられる）、その後A）:
+
+-- Option B: total reconciliation. sum of this fact table's rental_count
+-- must equal a plain COUNT(*) of the source table (same non-null
+-- rental_start_date filter, no period restriction on either side -- this
+-- checks the GROUP BY/JOIN didn't drop or duplicate rows, nothing about
+-- period filtering yet since that's Superset's job downstream).
+-- B: 全体突き合わせ。このfactテーブルのrental_countの合計は、元テーブルの
+-- 単純な COUNT(*)（同じ non-null rental_start_date 条件、期間による絞り込み
+-- はどちらもなし）と一致するはず -- GROUP BY/JOINで行が消えたり重複したり
+-- していないかの確認。期間フィルタ自体はSupersetの仕事なのでここでは扱わない。
+SELECT
+    (SELECT SUM(rental_count) FROM cur.monthly_rental_count) AS fact_table_total,
+    (SELECT COUNT(*) FROM cur.medical_device_rental_history WHERE rental_start_date IS NOT NULL) AS source_table_total;
+
+-- Option A: manual spot-check, 5-10 sample devices including at least one
+-- rental that spans a month boundary (rental_start_date and return_date in
+-- different months) -- confirm it's counted ONCE (in its start month), not
+-- twice, per the "no explode-by-month" reading above.
+-- A: 手動スポットチェック、5〜10台のサンプル機器。月をまたぐ貸出
+-- （rental_start_date と return_date が違う月）を最低1件含める -- 上記の
+-- 「月展開しない」という解釈どおり、開始月に1回だけカウントされていることを
+-- 確認する（2回にならないこと）。
+--
+-- Step 1: find a device with a month-spanning rental, to pick as one of the
+-- samples.
+-- ステップ1: 月をまたぐ貸出がある機器を、サンプルの1つとして探す。
+--
+-- SELECT client_device_number, rental_start_date, return_date
+-- FROM cur.medical_device_rental_history
+-- WHERE
+--     return_date IS NOT NULL
+--     AND date_trunc('month', rental_start_date) <> date_trunc('month', return_date)
+-- LIMIT 10;
+--
+-- Step 2: for each sampled client_device_number, compare the fact table's
+-- per-month counts against a manual count from the raw table.
+-- ステップ2: サンプルに選んだ client_device_number ごとに、factテーブルの
+-- 月別カウントと、生テーブルからの手動カウントを突き合わせる。
+--
+-- SELECT
+--     client_device_number,
+--     date_trunc('month', rental_start_date)::date AS month_start,
+--     COUNT(*) AS manual_count
+-- FROM cur.medical_device_rental_history
+-- WHERE
+--     client_device_number = :sample_device  -- fill in one id at a time
+--     AND rental_start_date IS NOT NULL
+-- GROUP BY 1, 2
+-- ORDER BY 1, 2;
