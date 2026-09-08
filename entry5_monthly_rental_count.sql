@@ -114,32 +114,32 @@
 -- スキーマ確認 -- 下記のDROP/CREATEより先にこれを実行し、上で仮定した
 -- カラム名のうち実際と違うものを修正すること。
 -- ============================================================
--- SELECT column_name, data_type, is_nullable
--- FROM information_schema.columns
--- WHERE table_schema = 'cur' AND table_name = 'medical_device_rental_history'
--- ORDER BY ordinal_position;
+SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_schema = 'cur' AND table_name = 'medical_device_rental_history'
+ORDER BY ordinal_position;
 
-DROP TABLE IF EXISTS cur.monthly_rental_count;
+-- DROP TABLE IF EXISTS cur.monthly_rental_count;
 
-CREATE TABLE cur.monthly_rental_count AS
-SELECT
-    r.client_device_number,
-    r.medical_facility_id,
-    r.medical_facility_name,
-    r.recipient_department,
-    date_trunc('month', r.rental_start_date)::date AS month_start,
-    COUNT(*) AS rental_count
-FROM cur.medical_device_rental_history r
-WHERE r.rental_start_date IS NOT NULL
-GROUP BY
-    r.client_device_number,
-    r.medical_facility_id,
-    r.medical_facility_name,
-    r.recipient_department,
-    date_trunc('month', r.rental_start_date)
-ORDER BY
-    r.client_device_number,
-    month_start;
+-- CREATE TABLE cur.monthly_rental_count AS
+-- SELECT
+--     r.client_device_number,
+--     r.medical_facility_id,
+--     r.medical_facility_name,
+--     r.recipient_department,
+--     date_trunc('month', r.rental_start_date)::date AS month_start,
+--     COUNT(*) AS rental_count
+-- FROM cur.medical_device_rental_history r
+-- WHERE r.rental_start_date IS NOT NULL
+-- GROUP BY
+--     r.client_device_number,
+--     r.medical_facility_id,
+--     r.medical_facility_name,
+--     r.recipient_department,
+--     date_trunc('month', r.rental_start_date)
+-- ORDER BY
+--     r.client_device_number,
+--     month_start;
 
 -- VALIDATION (per poc_metric_definition.md entry 5's どう確かめるか,
 -- recommendation: B first, cheap and catches systemic bugs, then A on a
@@ -156,9 +156,9 @@ ORDER BY
 -- 単純な COUNT(*)（同じ non-null rental_start_date 条件、期間による絞り込み
 -- はどちらもなし）と一致するはず -- GROUP BY/JOINで行が消えたり重複したり
 -- していないかの確認。期間フィルタ自体はSupersetの仕事なのでここでは扱わない。
-SELECT
-    (SELECT SUM(rental_count) FROM cur.monthly_rental_count) AS fact_table_total,
-    (SELECT COUNT(*) FROM cur.medical_device_rental_history WHERE rental_start_date IS NOT NULL) AS source_table_total;
+-- SELECT
+--     (SELECT SUM(rental_count) FROM cur.monthly_rental_count) AS fact_table_total,
+--     (SELECT COUNT(*) FROM cur.medical_device_rental_history WHERE rental_start_date IS NOT NULL) AS source_table_total;
 
 -- Option A: manual spot-check, 5-10 sample devices including at least one
 -- rental that spans a month boundary (rental_start_date and return_date in
