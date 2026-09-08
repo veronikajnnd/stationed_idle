@@ -7,7 +7,7 @@ WITH manual AS (
         COUNT(*) AS manual_count
     FROM cur.medical_device_rental_history
     WHERE
-        client_device_number IN ('CV181', 'IP775')
+        client_device_number IN ('CV181', 'IP775', 'FT016', 'IP773', 'IP530', 'SP1122')
         AND calculated_rental_start_date IS NOT NULL
     GROUP BY 1, 2, 3, 4
 ),
@@ -19,7 +19,7 @@ fact AS (
         month_start,
         rental_count
     FROM cur.monthly_rental_count
-    WHERE client_device_number IN ('CV181', 'IP775')
+    WHERE client_device_number IN ('CV181', 'IP775', 'FT016', 'IP773', 'IP530', 'SP1122')
 )
 SELECT
     COALESCE(m.client_device_number, f.client_device_number) AS client_device_number,
