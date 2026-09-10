@@ -236,12 +236,12 @@ SELECT
 -- samples.
 -- ステップ1: 月をまたぐ貸出がある機器を、サンプルの1つとして探す。
 --
-SELECT client_device_number, calculated_rental_start_date, calculated_return_date
-FROM cur.medical_device_rental_history
-WHERE
-    calculated_return_date IS NOT NULL
-    AND date_trunc('month', calculated_rental_start_date) <> date_trunc('month', calculated_return_date)
-LIMIT 10;
+-- SELECT client_device_number, calculated_rental_start_date, calculated_return_date
+-- FROM cur.medical_device_rental_history
+-- WHERE
+--     calculated_return_date IS NOT NULL
+--     AND date_trunc('month', calculated_rental_start_date) <> date_trunc('month', calculated_return_date)
+-- LIMIT 10;
 --
 -- NOTE (2026-09-09, Miyazawa-san's entry5 review follow-up): the query above,
 -- and the first attempt at excluding it (adding
@@ -264,22 +264,22 @@ LIMIT 10;
 -- なく3月全体を除外するか、12月→1月のケースを直接検索する:
 --
 -- -- Option 1: exclude the entire month of March, not just one date
-SELECT client_device_number, calculated_rental_start_date, calculated_return_date
-FROM cur.medical_device_rental_history
-WHERE
-    calculated_return_date IS NOT NULL
-    AND date_trunc('month', calculated_rental_start_date) <> date_trunc('month', calculated_return_date)
-    AND date_trunc('month', calculated_rental_start_date) <> '2026-03-01'
-LIMIT 10;
+-- SELECT client_device_number, calculated_rental_start_date, calculated_return_date
+-- FROM cur.medical_device_rental_history
+-- WHERE
+--     calculated_return_date IS NOT NULL
+--     AND date_trunc('month', calculated_rental_start_date) <> date_trunc('month', calculated_return_date)
+--     AND date_trunc('month', calculated_rental_start_date) <> '2026-03-01'
+-- LIMIT 10;
 --
 -- -- Option 2: search specifically for a year-end rollover (Dec -> Jan)
-SELECT client_device_number, calculated_rental_start_date, calculated_return_date
-FROM cur.medical_device_rental_history
-WHERE
-    calculated_return_date IS NOT NULL
-    AND EXTRACT(MONTH FROM calculated_rental_start_date) = 12
-    AND EXTRACT(MONTH FROM calculated_return_date) = 1
-LIMIT 10;
+-- SELECT client_device_number, calculated_rental_start_date, calculated_return_date
+-- FROM cur.medical_device_rental_history
+-- WHERE
+--     calculated_return_date IS NOT NULL
+--     AND EXTRACT(MONTH FROM calculated_rental_start_date) = 12
+--     AND EXTRACT(MONTH FROM calculated_return_date) = 1
+-- LIMIT 10;
 --
 -- Result 2026-09-10: Option 1 (exclude March start) surfaced a genuinely
 -- different boundary, Feb->Mar (calculated_rental_start_date = 2026-02-28,
@@ -330,38 +330,38 @@ LIMIT 10;
 -- 置き換えてから実行すること。そのまま実行する（\set sample_devices を
 -- 設定しないまま実行する）と ":" 付近で構文エラーになる。
 --
-WITH manual AS (
-    SELECT
-        client_device_number,
-        medical_facility_id,
-        recipient_department,
-        date_trunc('month', calculated_rental_start_date)::date AS month_start,
-        COUNT(*) AS manual_count
-    FROM cur.medical_device_rental_history
-    WHERE
-        client_device_number IN ('CV181','IP775', 'IP845') -- (:sample_devices) e.g. 'CV181','IP775',...
-        AND calculated_rental_start_date IS NOT NULL
-    GROUP BY 1, 2, 3, 4
-),
-fact AS (
-    SELECT client_device_number, medical_facility_id, recipient_department, month_start, rental_count
-    FROM cur.monthly_rental_count
-    WHERE client_device_number IN ('CV181','IP775', 'IP845') -- (:sample_devices) e.g. 'CV181','IP775',...
-)
-SELECT
-    COALESCE(m.client_device_number, f.client_device_number) AS client_device_number,
-    COALESCE(m.medical_facility_id, f.medical_facility_id) AS medical_facility_id,
-    COALESCE(m.recipient_department, f.recipient_department) AS recipient_department,
-    COALESCE(m.month_start, f.month_start) AS month_start,
-    m.manual_count,
-    f.rental_count AS fact_count
-FROM manual m
-FULL OUTER JOIN fact f
-    ON f.client_device_number = m.client_device_number
-   AND f.medical_facility_id = m.medical_facility_id
-   AND f.recipient_department IS NOT DISTINCT FROM m.recipient_department
-   AND f.month_start = m.month_start
-WHERE m.manual_count IS DISTINCT FROM f.rental_count;
+-- WITH manual AS (
+--     SELECT
+--         client_device_number,
+--         medical_facility_id,
+--         recipient_department,
+--         date_trunc('month', calculated_rental_start_date)::date AS month_start,
+--         COUNT(*) AS manual_count
+--     FROM cur.medical_device_rental_history
+--     WHERE
+--         client_device_number IN (:sample_devices)  -- e.g. 'CV181','IP775',...
+--         AND calculated_rental_start_date IS NOT NULL
+--     GROUP BY 1, 2, 3, 4
+-- ),
+-- fact AS (
+--     SELECT client_device_number, medical_facility_id, recipient_department, month_start, rental_count
+--     FROM cur.monthly_rental_count
+--     WHERE client_device_number IN (:sample_devices)
+-- )
+-- SELECT
+--     COALESCE(m.client_device_number, f.client_device_number) AS client_device_number,
+--     COALESCE(m.medical_facility_id, f.medical_facility_id) AS medical_facility_id,
+--     COALESCE(m.recipient_department, f.recipient_department) AS recipient_department,
+--     COALESCE(m.month_start, f.month_start) AS month_start,
+--     m.manual_count,
+--     f.rental_count AS fact_count
+-- FROM manual m
+-- FULL OUTER JOIN fact f
+--     ON f.client_device_number = m.client_device_number
+--    AND f.medical_facility_id = m.medical_facility_id
+--    AND f.recipient_department IS NOT DISTINCT FROM m.recipient_department
+--    AND f.month_start = m.month_start
+-- WHERE m.manual_count IS DISTINCT FROM f.rental_count;
 --
 -- Result 2026-09-08: 0 rows, first against 2 sample devices (CV181, IP775),
 -- then re-run against 6 (CV181, IP775, FT016, IP773, IP530, SP1122), all
