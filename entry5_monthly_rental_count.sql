@@ -160,11 +160,33 @@
 
 DROP TABLE IF EXISTS cur.monthly_rental_count;
 
+-- REVISED 2026-09-09 (task9 follow-up, Miyazawa-san's entry5 review):
+-- medical_facility_name was dropped from this GROUP BY / SELECT.
+-- 診断クエリ (COUNT(DISTINCT medical_facility_name) per medical_facility_id)
+-- を実データで実行した結果、medical_facility_id=1 の distinct_names は 0 件、
+-- つまりこのカラムは全行 NULL で、実質的に情報を持っていない。GROUP BY に
+-- 残しても現時点では行の分割は起きないが、"意味のない列を念のため引き回す"
+-- のはentry4のcurated_is_failure/curated_repair_classificationと同じ形の
+-- 問題（方向は逆で、今回は「追加してはいけない列」）なので、確認できた時点で
+-- 削除する。将来 medical_facility_name が実際に埋まるようになった場合は、
+-- 1つの medical_facility_id が複数の名前を持ちうるかを再度確認してから
+-- GROUP BY に戻すこと。
+--
+-- Diagnostic query run against real data (COUNT(DISTINCT medical_facility_name)
+-- per medical_facility_id) showed medical_facility_id=1 has distinct_names=0 --
+-- meaning this column is NULL for 100% of rows, carrying no information today.
+-- Leaving it in the GROUP BY wasn't wrong (it wasn't splitting any rows), but
+-- it's the same shape of issue as entry4's curated_is_failure /
+-- curated_repair_classification (a column threaded through "just in case"),
+-- just in the opposite direction (a column that should never have been added
+-- rather than one that should have been removed). Dropped now that it's
+-- confirmed. If medical_facility_name is ever populated for real, re-check
+-- whether one medical_facility_id can map to multiple names before adding it
+-- back to the GROUP BY.
 CREATE TABLE cur.monthly_rental_count AS
 SELECT
     r.client_device_number,
     r.medical_facility_id,
-    r.medical_facility_name,
     r.recipient_department,
     date_trunc('month', r.calculated_rental_start_date)::date AS month_start,
     COUNT(*) AS rental_count
@@ -173,7 +195,6 @@ WHERE r.calculated_rental_start_date IS NOT NULL
 GROUP BY
     r.client_device_number,
     r.medical_facility_id,
-    r.medical_facility_name,
     r.recipient_department,
     date_trunc('month', r.calculated_rental_start_date)
 ORDER BY
@@ -198,7 +219,7 @@ ORDER BY
 -- 重複したりしていないかの確認。期間フィルタ自体はSupersetの仕事なのでここ
 -- では扱わない。
 SELECT
-    (SELECT SUM(rental_count) FROM cur.monthly_rental_count) AS table_total,
+    (SELECT SUM(rental_count) FROM cur.monthly_rental_count) AS fact_table_total,
     (SELECT COUNT(*) FROM cur.medical_device_rental_history WHERE calculated_rental_start_date IS NOT NULL) AS source_table_total;
 
 -- Option A: manual spot-check, 5-10 sample devices including at least one
@@ -222,18 +243,105 @@ WHERE
     AND date_trunc('month', calculated_rental_start_date) <> date_trunc('month', calculated_return_date)
 LIMIT 10;
 --
--- Step 2: for each sampled client_device_number, compare the fact table's
--- per-month counts against a manual count from the raw table.
--- ステップ2: サンプルに選んだ client_device_number ごとに、factテーブルの
--- 月別カウントと、生テーブルからの手動カウントを突き合わせる。
+-- NOTE (2026-09-09, Miyazawa-san's entry5 review follow-up): the query above,
+-- and the first attempt at excluding it (adding
+-- "AND calculated_rental_start_date <> '2026-03-31'"), both still return only
+-- March->April boundary cases -- the excluded version just lands on
+-- 2026-03-30 instead of 2026-03-31, a different day but the SAME month pair.
+-- All 10 candidates the first version returned happened to share the exact
+-- date 2026-03-31, so 6 samples drawn from that list tested one boundary
+-- type, not 6 varied ones, exactly as Miyazawa-san's review pointed out. To
+-- actually get a different kind of boundary (a different pair of adjacent
+-- months, ideally a year rollover), exclude the whole month of March instead
+-- of one date, or search directly for a December->January case:
+-- 備考（2026-09-09、entry5レビューのフォローアップ）: 上のクエリも、それを
+-- 「AND calculated_rental_start_date <> '2026-03-31'」で除外した最初の対応も、
+-- どちらも3月→4月の境界しか返さない -- 除外後は2026-03-30になるだけで、
+-- 日付が違うだけで同じ月の組み合わせのまま。最初のクエリが返した10件は
+-- すべて同じ日付2026-03-31だったので、そこから選んだ6件のサンプルは
+-- 1種類の境界しかテストしておらず、Miyazawa-san のレビュー指摘どおりだった。
+-- 本当に別種の境界（できれば年をまたぐ12月→1月）を得るには、1つの日付では
+-- なく3月全体を除外するか、12月→1月のケースを直接検索する:
 --
--- SELECT
---     client_device_number,
---     date_trunc('month', calculated_rental_start_date)::date AS month_start,
---     COUNT(*) AS manual_count
--- FROM cur.medical_device_rental_history
--- WHERE
---     client_device_number = :sample_device  -- fill in one id at a time
---     AND calculated_rental_start_date IS NOT NULL
--- GROUP BY 1, 2
--- ORDER BY 1, 2;
+-- -- Option 1: exclude the entire month of March, not just one date
+SELECT client_device_number, calculated_rental_start_date, calculated_return_date
+FROM cur.medical_device_rental_history
+WHERE
+    calculated_return_date IS NOT NULL
+    AND date_trunc('month', calculated_rental_start_date) <> date_trunc('month', calculated_return_date)
+    AND date_trunc('month', calculated_rental_start_date) <> '2026-03-01'
+LIMIT 10;
+--
+-- -- Option 2: search specifically for a year-end rollover (Dec -> Jan)
+SELECT client_device_number, calculated_rental_start_date, calculated_return_date
+FROM cur.medical_device_rental_history
+WHERE
+    calculated_return_date IS NOT NULL
+    AND EXTRACT(MONTH FROM calculated_rental_start_date) = 12
+    AND EXTRACT(MONTH FROM calculated_return_date) = 1
+LIMIT 10;
+--
+-- Step 2 (corrected 2026-09-08 after two false starts -- see the task9/
+-- entry5 worklog for the full story): compare the fact table's counts
+-- against a manual count from the raw table, at the SAME grain the fact
+-- table actually uses (device x facility x department x month, not just
+-- device x month -- an earlier attempt grouped too coarsely and produced a
+-- misleading row-count mismatch that looked like a bug but wasn't), and
+-- with BOTH sides of the join scoped to the sample device list (an earlier
+-- attempt only filtered the manual side, so the FULL OUTER JOIN matched
+-- against the entire 224k-row fact table and produced ~224k false
+-- "mismatches" -- every other device with nothing to match against).
+-- This is a diff-style query: it returns ONLY rows where the two sides
+-- disagree, so an empty result (0 rows) is success, not a null result.
+-- ステップ2（2026-09-08、2回の空振りの後に修正 -- 経緯はtask9/entry5の
+-- worklog参照）: factテーブルの実際のgrain（device x facility x
+-- department x 月。device x 月だけではない -- 最初の試みは粗すぎる粒度で
+-- グルーピングしてしまい、バグに見えるが実はバグではない行数の不一致を
+-- 出してしまった）に合わせて、生テーブルからの手動カウントと突き合わせる。
+-- 両サイドともサンプル機器リストで絞り込む（最初の試みはmanual側だけ絞って
+-- おり、FULL OUTER JOIN がfactテーブル全体（22万行超）と突き合わさり、
+-- 約22万件の偽の「不一致」を出してしまった -- 単に比較対象がない他の
+-- 機器たち）。これは差分クエリなので、両者が食い違う行だけを返す --
+-- 空（0行）が成功であり、結果が無いという意味ではない。
+--
+WITH manual AS (
+    SELECT
+        client_device_number,
+        medical_facility_id,
+        recipient_department,
+        date_trunc('month', calculated_rental_start_date)::date AS month_start,
+        COUNT(*) AS manual_count
+    FROM cur.medical_device_rental_history
+    WHERE
+        client_device_number IN (:sample_devices)  -- e.g. 'CV181','IP775',...
+        AND calculated_rental_start_date IS NOT NULL
+    GROUP BY 1, 2, 3, 4
+),
+fact AS (
+    SELECT client_device_number, medical_facility_id, recipient_department, month_start, rental_count
+    FROM cur.monthly_rental_count
+    WHERE client_device_number IN (:sample_devices)
+)
+SELECT
+    COALESCE(m.client_device_number, f.client_device_number) AS client_device_number,
+    COALESCE(m.medical_facility_id, f.medical_facility_id) AS medical_facility_id,
+    COALESCE(m.recipient_department, f.recipient_department) AS recipient_department,
+    COALESCE(m.month_start, f.month_start) AS month_start,
+    m.manual_count,
+    f.rental_count AS fact_count
+FROM manual m
+FULL OUTER JOIN fact f
+    ON f.client_device_number = m.client_device_number
+   AND f.medical_facility_id = m.medical_facility_id
+   AND f.recipient_department IS NOT DISTINCT FROM m.recipient_department
+   AND f.month_start = m.month_start
+WHERE m.manual_count IS DISTINCT FROM f.rental_count;
+--
+-- Result 2026-09-08: 0 rows, first against 2 sample devices (CV181, IP775),
+-- then re-run against 6 (CV181, IP775, FT016, IP773, IP530, SP1122), all
+-- drawn from Step 1's month-spanning candidates. See the task9/entry5
+-- worklog for the full output and analysis.
+-- 2026-09-08の結果: 0行。まず2台（CV181, IP775）、次に6台
+-- （CV181, IP775, FT016, IP773, IP530, SP1122、いずれもStep1で見つけた
+-- 月をまたぐ候補）で再実行、どちらも0行。詳しい出力と分析はtask9/entry5の
+-- worklog参照。
