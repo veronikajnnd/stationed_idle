@@ -281,6 +281,21 @@ WHERE
     AND EXTRACT(MONTH FROM calculated_return_date) = 1
 LIMIT 10;
 --
+-- Result 2026-09-10: Option 1 (exclude March start) surfaced a genuinely
+-- different boundary, Feb->Mar (calculated_rental_start_date = 2026-02-28,
+-- e.g. CV186, IP571, IP409, IP573, IP617, IP689, UN223, DM755, IP659,
+-- SP1165). Option 2 (Dec->Jan filter) also matched real data (start
+-- 2025-12-28, e.g. IP845, FP055, IP587, CV199, SP882, NO004, NM040,
+-- SP1111, SP1140, IP737) -- a genuine year rollover, not just a different
+-- day within the same month pair. Both give Step 2 a real second and third
+-- boundary type to test, on top of the March->April set from 2026-09-08.
+-- 2026-09-10の結果: Option 1（開始月が3月のものを除外）は本当に別種の境界
+-- （2月→3月、calculated_rental_start_date = 2026-02-28、例: CV186, IP571,
+-- IP409ほか）を返した。Option 2（12月→1月フィルタ）も実データに一致
+-- （開始2025-12-28、例: IP845, FP055, IP587ほか）-- 単に同じ月の組み合わせの
+-- 別の日ではなく、本当に年をまたぐケース。これでStep2は2026-09-08の
+-- 3月→4月のセットに加えて、本当に別の2種類の境界でテストできる。
+--
 -- Step 2 (corrected 2026-09-08 after two false starts -- see the task9/
 -- entry5 worklog for the full story): compare the fact table's counts
 -- against a manual count from the raw table, at the SAME grain the fact
@@ -304,6 +319,17 @@ LIMIT 10;
 -- 機器たち）。これは差分クエリなので、両者が食い違う行だけを返す --
 -- 空（0行）が成功であり、結果が無いという意味ではない。
 --
+-- NOTE: ":sample_devices" below is a plain-text placeholder for this comment
+-- block, not a psql variable -- copy the query out, delete the leading "--"
+-- on each line, and replace BOTH ":sample_devices" occurrences with a real
+-- literal list (e.g. 'CV181','IP775') before running it. Running it as-is
+-- (or with \set sample_devices unset) raises a syntax error at ":".
+-- 注意: 以下の ":sample_devices" はこのコメント内のプレースホルダーであり、
+-- psql変数ではない -- クエリ本体をコピーし、各行先頭の"--"を削除した上で、
+-- ":sample_devices" の2箇所を実際のリテラルのリスト（例: 'CV181','IP775'）に
+-- 置き換えてから実行すること。そのまま実行する（\set sample_devices を
+-- 設定しないまま実行する）と ":" 付近で構文エラーになる。
+--
 WITH manual AS (
     SELECT
         client_device_number,
@@ -313,14 +339,14 @@ WITH manual AS (
         COUNT(*) AS manual_count
     FROM cur.medical_device_rental_history
     WHERE
-        client_device_number IN (:sample_devices)  -- e.g. 'CV181','IP775',...
+        client_device_number IN ('CV181','IP775', 'IP845') -- (:sample_devices) e.g. 'CV181','IP775',...
         AND calculated_rental_start_date IS NOT NULL
     GROUP BY 1, 2, 3, 4
 ),
 fact AS (
     SELECT client_device_number, medical_facility_id, recipient_department, month_start, rental_count
     FROM cur.monthly_rental_count
-    WHERE client_device_number IN (:sample_devices)
+    WHERE client_device_number IN ('CV181','IP775', 'IP845') -- (:sample_devices) e.g. 'CV181','IP775',...
 )
 SELECT
     COALESCE(m.client_device_number, f.client_device_number) AS client_device_number,
