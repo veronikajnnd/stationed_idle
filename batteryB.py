@@ -38,7 +38,7 @@ from sqlalchemy import create_engine
 
 # 同じフォルダの既存スクリプトから再利用する（ロジックを重複させない）
 # Reuse from the sibling script instead of duplicating the classification logic.
-from battery_wear_option_ab_simulation import _QUERY, _build_haystack, classify_option_b
+from battery import _QUERY, _build_haystack, classify_option_b
 from streamedix_datacuration.core.failure_classifier import FAILURE
 
 
