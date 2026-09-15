@@ -5,14 +5,14 @@ Vocabulary normalization investigation for rule3 (maintenance) keywords: categor
 vs note-only breakdown, plus full-width/half-width variant-form duplicates.
 
 背景 / Background:
-    battery_wear_option_ab_simulation.py の Option A 実行結果、rule3 を category+note
+    battery.py の Option A 実行結果、rule3 を category+note
     (haystack) 判定にした場合の「collateral」行 (バッテリー消耗と無関係にマッチする行) が
     1,712 件見つかり、その92%（1,574件）が「交換」1語だけで占められていた。
     Miyazawa-san の 2026-09-14 レビューで、この「交換」ほかの collateral キーワード群を
     語彙正規化の提案としてこのタスクで調べるよう指示された。あわせて、rule3のキーワード
     一覧に全角/半角の表記ゆれ（例: バージョンアップ / ﾊﾞｰｼﾞｮﾝｱｯﾌﾟ）がないかも確認する。
 
-    battery_wear_option_ab_simulation.py's Option A run found 1,712 "collateral" rows
+    battery.py's Option A run found 1,712 "collateral" rows
     (rows that change purely because rule3 now reads notes, unrelated to バッテリー消耗
     itself), 92% of which (1,574) came from "交換" alone. Per Miyazawa-san's 2026-09-14
     review, this script investigates 交換 and the other collateral keywords as input for
@@ -20,9 +20,9 @@ vs note-only breakdown, plus full-width/half-width variant-form duplicates.
     for full-width/half-width duplicate forms (e.g. バージョンアップ vs ﾊﾞｰｼﾞｮﾝｱｯﾌﾟ).
 
 本番コードは変更しない / does NOT modify the shipped failure_classifier.py:
-    battery_wear_option_ab_simulation.py と同じディレクトリに置いて実行する。
+    battery.py と同じディレクトリに置いて実行する。
     そのファイルの _QUERY / _build_haystack をそのまま再利用する。
-    Place this file in the SAME directory as battery_wear_option_ab_simulation.py — it
+    Place this file in the SAME directory as battery.py — it
     imports _QUERY / _build_haystack from that file rather than duplicating them.
 
 実行方法 / How to run (same venv as the other scripts):
@@ -36,7 +36,7 @@ from collections import Counter
 
 from sqlalchemy import create_engine
 
-from battery_wear_option_ab_simulation import _QUERY, _build_haystack
+from battery import _QUERY, _build_haystack
 from streamedix_datacuration.core.failure_classifier import classify_repair_explained as classify_baseline
 
 # rule3 の現行キーワード一覧を、表記ゆれ（全角/半角）がある語はグループにまとめて定義する。
