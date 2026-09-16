@@ -110,6 +110,17 @@ def main() -> int:
     # fire via rule1 (not accidentally moved to a different rule that happens to also
     # resolve to failure).
     rule_transitions = Counter()
+    # 「バッテリー消耗」を含み、before/after とも failure のまま不変の行数
+    # (ADR-2026-06-16 の「境界 — 修理不能」で言う49行に対応するはずの数)。
+    # transitions の failure->failure (10,341件) には無関係な行が大量に混じっているため、
+    # この数はそこから直接読めない。ここで明示的に分離して数える。
+    #
+    # Count of rows containing バッテリー消耗 that stay failure->failure (should correspond
+    # to the 49 rows from ADR-2026-06-16's "境界 — 修理不能"). This can't be read off the
+    # aggregate failure->failure transition (10,341, mostly unrelated rows), so it is
+    # isolated explicitly here.
+    battery_wear_failure_before = 0
+    battery_wear_failure_stayed = 0
 
     for row in rows:
         (
@@ -124,8 +135,13 @@ def main() -> int:
         if b_cls == FAILURE_CONST or a_cls == FAILURE_CONST:
             rule_transitions[(b_rule, a_rule)] += 1
 
+        has_battery_wear = _BATTERY_WEAR_WORD in _haystack(cat, ev, fr, wn, rr)
+        if has_battery_wear and b_cls == FAILURE_CONST:
+            battery_wear_failure_before += 1
+            if a_cls == FAILURE_CONST:
+                battery_wear_failure_stayed += 1
+
         if b_cls != a_cls:
-            has_battery_wear = _BATTERY_WEAR_WORD in _haystack(cat, ev, fr, wn, rr)
             record = {
                 "medical_device_repair_history_id": hist_id,
                 "device_number": device_number,
@@ -160,6 +176,16 @@ def main() -> int:
     print(f"  failure -> maintenance : {fail_to_maint:>7,}  (expected 2,686)")
     print(f"  failure -> inspection  : {fail_to_insp:>7,}  (expected 10)")
     print(f"  total changed rows     : {changed_total:>7,}  (expected 2,696 = 2,686 + 10)")
+    print()
+
+    # transitions の failure->failure (10,341) には無関係な行が大量に混じっているため、
+    # ADRの「49行」をそこから直接読むことはできない。ここで明示的に分離して報告する。
+    # The aggregate failure->failure count (10,341) is mostly unrelated rows, so the ADR's
+    # "49 rows" figure can't be read off it directly; report the isolated count explicitly.
+    print("=== バッテリー消耗-matching rows: before/after breakdown (isolates the ADR's '49') ===")
+    print(f"  バッテリー消耗 rows classified failure BEFORE : {battery_wear_failure_before:>7,}  (expected 2,745 = 2,696 + 49)")
+    print(f"  ...of which stayed failure AFTER              : {battery_wear_failure_stayed:>7,}  (expected 49)")
+    print(f"  ...of which moved off failure (= changed_total above) : {battery_wear_failure_before - battery_wear_failure_stayed:>7,}  (expected 2,696)")
     print()
 
     print("=== collateral check (ADR-2026-09-15 決定事項6: 対象語だけが動くこと) ===")
