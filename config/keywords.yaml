@@ -1,0 +1,120 @@
+# 故障実績分類 共通辞書 (ADR-2026-06-16 決定事項7: 共通辞書全体のYAML化)
+# Shared keyword dictionary for failure classification (ADR-2026-06-16 decision 7:
+# YAML-ify the whole common dictionary).
+#
+# 実際の配置先 / Real destination in the repo:
+#   config/failure_classification/keywords.yaml
+# failure_classifier.py と classification_report.py はどちらも keyword_dictionary.py 経由で
+# このファイルを読む。キーワードの追加/変更はこのファイルの編集のみで完結する
+# (rule2.5 の例外追加を除く。あちらは ADR-2026-06-16 決定事項6の手順に従う: before/after
+# 証跡付きで exceptions セクションに1行追加する)。
+#
+# Both failure_classifier.py and classification_report.py read this file through
+# keyword_dictionary.py. Adding or changing a keyword is a pure edit to this file (except
+# rule2.5 exceptions, which follow ADR-2026-06-16 decision 6's procedure: add one line to
+# the exceptions section below, with before/after proof).
+#
+# 正規化 / Normalization:
+#   マッチング前に、区分+ノートの本文とここに書く全キーワードの両方に Unicode NFKC 正規化を
+#   適用する (keyword_dictionary.py の normalize()。半角カナ (例: ﾊﾞｰｼﾞｮﾝｱｯﾌﾟ) は全角
+#   (バージョンアップ) に統一されるため、幅違いのエントリをここに重複して書く必要はない。
+#   旧実装 (failure_classifier.py, コード定数版) にあった半角カナ重複エントリ
+#   (ﾊﾞｰｼﾞｮﾝｱｯﾌﾟ, ｵｰﾊﾞｰﾎｰﾙ) はここでは意図的に削除した。NFKC正規化により全角側の
+#   エントリだけで両方の表記を拾えるはずだが、これは commit2 の before/after 検証
+#   (再分類結果の差分がゼロ、または NFKC統一が原因の差分のみであることの確認) で証明する。
+#
+#   Both the category+note text and every keyword below are NFKC-normalized before matching
+#   (keyword_dictionary.py's normalize()). Half-width katakana (e.g. ﾊﾞｰｼﾞｮﾝｱｯﾌﾟ) normalizes
+#   to full-width (バージョンアップ), so width-variant duplicates no longer need to be listed
+#   here. The old implementation's (failure_classifier.py, code-constant version) half-width
+#   duplicates (ﾊﾞｰｼﾞｮﾝｱｯﾌﾟ, ｵｰﾊﾞｰﾎｰﾙ) are intentionally dropped here. NFKC normalization
+#   should mean the full-width entry alone catches both spellings, but that claim is exactly
+#   what commit2's before/after check must prove (zero diff, or a diff caused only by this
+#   NFKC unification).
+
+version: 1
+updated: '2026-09-17'
+
+# ルール1: 不具合シグナル (区分+ノート) → failure
+# Rule 1: failure signal (category+note) -> failure
+failure_signal:
+  keywords:
+    - 不具合
+    - 故障
+    - 破損
+    - 落下
+    - 異常
+    - 不良
+    - エラー
+    - 動作不良
+    - 修理不能
+    - 破壊
+    - 断線
+    - 漏れ
+    - 回収
+    - リコール
+    - recall
+  # キーワード直後にこれが続く場合は不具合シグナルとみなさない (例: "異常なし")
+  # Negation immediately following a keyword excludes the match (e.g. "異常なし")
+  negation_pattern: '(?:なし|無し|ではない|では無い|なかった|ありません|無く)'
+
+# ルール1.5: 取込が出力する正規トークン (英語) の完全一致 → 対応する分類
+# Rule 1.5: exact match on canonical import tokens (English) -> corresponding classification
+canonical_tokens:
+  repair: failure
+  inspection: inspection
+  maintenance: maintenance
+  no_fault: no_fault
+
+# ルール2: 区分に含む → inspection
+# Rule 2: category contains -> inspection
+inspection:
+  keyword: 点検
+
+# ルール2.5: 個別例外キーワード (区分+ノート、1語ずつ登録) → 登録された分類
+# Rule 2.5: word-level exceptions (category+note, registered one word at a time) ->
+# registered classification.
+# 新しい語を追加する手順は ADR-2026-06-16 決定事項6を参照 (境界表に1行追加 + before/after
+# 証跡)。commit2 の時点では「バッテリー消耗」のみ。「セル交換」は commit3 で追加する
+# (commit2 は「結果が1行も変わらない」ことの確認が目的のため、意図的にここでは追加しない)。
+#
+# See ADR-2026-06-16 decision 6 for the procedure to add a new word (boundary-table line +
+# before/after proof). Only バッテリー消耗 as of commit2; セル交換 is added in commit3
+# (deliberately not here, since commit2's pass condition is "zero rows change").
+exceptions:
+  - word: バッテリー消耗
+    classification: maintenance
+    added: '2026-09-15'
+    reason: "ADR-2026-06-16 2026-09-15 改訂 (Option B)"
+
+# ルール3: 区分に含む → maintenance
+# Rule 3: category contains -> maintenance
+maintenance:
+  keywords:
+    - 交換
+    - メンテ
+    - バージョンアップ
+    - 改修
+    - 是正
+    - 部品
+    - セル交換
+    - 改良
+    - 調整
+    - オーバーホール
+
+# ルール4: 区分に含む → no_fault
+# Rule 4: category contains -> no_fault
+no_fault:
+  category_keywords:
+    - 問題なし
+    - 問題無し
+    - 異常なし
+    - 異常無し
+    - 問題無
+    - 異常無
+
+# ルール4.5: 区分に含む → failure (positive、明示的な修理語)
+# Rule 4.5: category contains -> failure (positive match on an explicit repair word)
+repair:
+  keywords:
+    - 修理
