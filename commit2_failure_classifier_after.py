@@ -27,7 +27,7 @@ task11 で対応)。ルール2.5 はルール2 (点検) の後・ルール3 (軽
 2026-09-17 改訂 (task11 commit2、ADR-2026-06-16 決定事項7): キーワード辞書 (ルール1の
 不具合シグナル語・否定パターン、ルール1.5の正規トークン、ルール2の点検語、ルール2.5の
 例外、ルール3の軽微作業語、ルール4の不問語、ルール4.5の修理語) を、このファイル内の
-モジュール定数からロードするのではなく、config/failure_classification/keywords.yaml から
+モジュール定数からロードするのではなく、config/keywords.yaml から
 keyword_dictionary.load_dictionary() 経由でロードする形に変更。コードを触らずキーワードを
 追加/変更できるようにするのが目的 (rule2.5 の例外追加を除く。あちらは今まで通り ADR の
 決定事項6の手順で YAML の exceptions セクションに1行追加する)。
@@ -91,12 +91,12 @@ LABELS_JA: Dict[str, str] = {
     NO_FAULT: "不問",
 }
 
-# キーワード辞書のロード (起動時に1回、検証込み)。config/failure_classification/keywords.yaml
+# キーワード辞書のロード (起動時に1回、検証込み)。config/keywords.yaml
 # が壊れている場合はここで DictionaryValidationError が送出され、import 時点で fail-fast する
 # (壊れた辞書のまま分類が動き続けることを防ぐ)。
 #
 # Load the keyword dictionary once at import time (validated). A malformed
-# config/failure_classification/keywords.yaml raises DictionaryValidationError right here,
+# config/keywords.yaml raises DictionaryValidationError right here,
 # so the module fails to import rather than classifying rows against a broken dictionary.
 _DICT = load_dictionary()
 

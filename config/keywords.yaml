@@ -3,7 +3,7 @@
 # YAML-ify the whole common dictionary).
 #
 # 実際の配置先 / Real destination in the repo:
-#   config/failure_classification/keywords.yaml
+#   config/keywords.yaml
 # failure_classifier.py と classification_report.py はどちらも keyword_dictionary.py 経由で
 # このファイルを読む。キーワードの追加/変更はこのファイルの編集のみで完結する
 # (rule2.5 の例外追加を除く。あちらは ADR-2026-06-16 決定事項6の手順に従う: before/after
