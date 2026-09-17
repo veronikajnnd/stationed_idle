@@ -7,13 +7,13 @@ Shared keyword-dictionary loader for failure classification (ADR-2026-06-16 deci
     (failure_classifier.py と同じディレクトリ / same directory as failure_classifier.py)
 
 failure_classifier.py と classification_report.py はどちらもこのモジュール経由で
-config/failure_classification/keywords.yaml を読み込む。ロードは1回だけ行い
+config/keywords.yaml を読み込む。ロードは1回だけ行い
 (load_dictionary は lru_cache でメモ化)、内容は起動時に検証する。壊れた YAML
 (必須フィールド欠落・不正な classification 値・重複語 等) は import 時点で
 DictionaryValidationError を送出し、壊れた辞書のまま本番が動き続けることを防ぐ。
 
 Both failure_classifier.py and classification_report.py load
-config/failure_classification/keywords.yaml through this module. Loading happens once
+config/keywords.yaml through this module. Loading happens once
 (load_dictionary is memoized via lru_cache) and the content is validated at load time.
 A malformed YAML file (missing required field, invalid classification value, duplicate
 word, etc.) raises DictionaryValidationError at import time, so a broken dictionary
@@ -38,11 +38,9 @@ import yaml
 # classifications), so they can't drift apart in practice.
 VALID_CLASSIFICATIONS = ("failure", "inspection", "maintenance", "no_fault")
 
-# config/failure_classification/keywords.yaml (streamedix_datacuration/core/ から見て
-# リポジトリルート直下の config/ 配下)。
-_DEFAULT_PATH = (
-    Path(__file__).resolve().parents[2] / "config" / "failure_classification" / "keywords.yaml"
-)
+# config/keywords.yaml (streamedix_datacuration/core/ から見てリポジトリルート直下の
+# config/ 配下)。
+_DEFAULT_PATH = Path(__file__).resolve().parents[2] / "config" / "keywords.yaml"
 
 
 class DictionaryValidationError(ValueError):
@@ -227,7 +225,7 @@ def load_dictionary(path: Optional[str] = None) -> KeywordDictionary:
 
     テストで異なる内容を検証する場合は load_dictionary.cache_clear() を呼んでから
     別の path (一時ファイル) を渡すこと。path=None (デフォルト) は本番の
-    config/failure_classification/keywords.yaml を指す。
+    config/keywords.yaml を指す。
 
     Loads, validates and caches keywords.yaml. Repeated calls with the same path return
     the cached result without re-parsing, so failure_classifier.py and
@@ -235,7 +233,7 @@ def load_dictionary(path: Optional[str] = None) -> KeywordDictionary:
 
     Tests that need different content should call load_dictionary.cache_clear() first and
     pass a different path (a temp file). path=None (the default) points at the real
-    config/failure_classification/keywords.yaml.
+    config/keywords.yaml.
     """
     target = Path(path) if path else _DEFAULT_PATH
     with target.open("r", encoding="utf-8") as f:
