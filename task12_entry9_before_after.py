@@ -150,6 +150,10 @@ _ROWS_SQL = text(
 
 _Cell = Tuple[Optional[int], str]  # (medical_device_ledger_id, 'YYYY-MM')
 
+# SQL に足した条件の文字列 (変更前後の比較で、これを外した SQL を作る)
+# The condition added to the SQL (removed in text to build the pre-change SQL for the comparison).
+_LEDGER_FILTER = "AND r.medical_device_ledger_id IS NOT NULL"
+
 
 def _source_sql(
     ids_filter: str, is_failure_expr: str
@@ -327,6 +331,7 @@ def main() -> int:
         # --- 7. Does the real cur.monthly_failure_downtime currently equal BEFORE (is it stale)? ---
         table_exists = conn.execute(text("SELECT to_regclass('cur.monthly_failure_downtime') IS NOT NULL")).scalar()
         stale: List[_Cell] = []
+        stale_null: List[_Cell] = []
         null_ledger_in_table: Optional[bool] = None
         real: Dict[_Cell, float] = {}
         if table_exists:
@@ -341,30 +346,37 @@ def main() -> int:
                 if abs(real.get(cell, 0.0) - before_fact.get(cell, 0.0)) > 0.011:
                     stale.append(cell)
             null_ledger_in_table = any(c[0] is None for c in real)
+            # NULL ledger のセルは、IS NOT NULL を足した SQL で作り直すと消える。実テーブルが古い SQL で
+            # 作られていれば残っているので、ここで差として出るのは想定内。別に数える。
+            # NULL-ledger cells vanish when the table is rebuilt with the IS NOT NULL condition. If the
+            # real table was built with the older SQL they remain, so that difference is expected and is
+            # counted separately from genuine staleness.
+            stale_null = [c for c in stale if c[0] is None]
+            stale = [c for c in stale if c[0] is not None]
 
-        # --- 8. 仕様の穴の大きさ: ledger_id が NULL の failure 行が、fact に (NULL, 月) として何時間入るか ---
-        # テスト test_repair_with_null_ledger_id_is_excluded が指摘する穴 (template §6/§7 vs SQL)。全テーブルが対象。
-        # --- 8. Size of the spec hole: how many hours do failure rows with NULL ledger_id add to the
-        # fact as (NULL, month)? The hole flagged by test_repair_with_null_ledger_id_is_excluded
-        # (template section 6/7 vs the SQL). Whole table, not only the セル交換 rows.
+        # --- 8. SQL 変更そのものの効果: IS NOT NULL を足す前後で、fact 全体がどう変わるか ---
+        # 足した条件だけを SQL 文字列から外して「変更前の SQL」を作り、同じ全行に対して両方を回す。
+        # 変わるのは NULL ledger のセルだけのはず (それ以外のセルは1つも変わらない)。
+        # --- 8. Effect of the SQL change itself: how the whole fact changes with vs without the
+        # IS NOT NULL condition. The condition is removed from the SQL text to get the pre-change SQL,
+        # and both are run over all rows. Only NULL-ledger cells should change (no other cell).
         null_rows_total = conn.execute(text(
             "SELECT count(*) FROM cur.medical_device_repair_history "
             "WHERE is_failure = true AND medical_device_ledger_id IS NULL "
             "AND calculated_trouble_date IS NOT NULL"
         )).scalar()
-        null_pool = _run_fact(
-            conn, fact_select,
-            _source_sql("h.medical_device_ledger_id IS NULL", "h.is_failure"),
-        )
-        null_hours_total = sum(null_pool.values())
-
-        # 比較用: fact 全体 (全機器) の合計時間とセル数。NULL のプールが全体のどれくらいかを見る。
-        # For scale: total hours and cell count of the whole fact (all devices), to see how large the
-        # NULL pool is relative to it.
-        whole_fact = _run_fact(conn, fact_select, _source_sql("true", "h.is_failure"))
-        whole_hours_total = sum(whole_fact.values())
-        whole_cells_total = len(whole_fact)
-        null_months = sorted(c[1] for c in null_pool)
+        has_ledger_filter = _LEDGER_FILTER in fact_select
+        legacy_select = fact_select.replace(_LEDGER_FILTER, "AND true") if has_ledger_filter else fact_select
+        whole_new = _run_fact(conn, fact_select, _source_sql("true", "h.is_failure"))
+        whole_old = _run_fact(conn, legacy_select, _source_sql("true", "h.is_failure"))
+        dropped = sorted((c for c in whole_old if c not in whole_new), key=lambda c: c[1])
+        dropped_non_null = [c for c in dropped if c[0] is not None]
+        changed_other = [c for c in whole_new
+                         if abs(whole_new[c] - whole_old.get(c, 0.0)) > 0.011]
+        dropped_hours = sum(whole_old[c] for c in dropped)
+        old_hours_total = sum(whole_old.values())
+        new_hours_total = sum(whole_new.values())
+        dropped_months = [c[1] for c in dropped]
 
     # ================= 出力 / Output =================
     print("=== セル交換を含む全行 (動いた行 / 動かない行) / all rows containing セル交換 ===")
@@ -375,7 +387,8 @@ def main() -> int:
         print(f"--- after_rule = {rule} ({len(group)} rows) ---")
         for r in group:
             moved = r in left_failure or r in joined_failure
-            in_fact_before = r["stored_is_failure"] and r["trouble"] is not None
+            in_fact_before = (r["stored_is_failure"] and r["trouble"] is not None
+                              and r["ledger"] is not None)
             note = []
             if moved:
                 hours = sum(contribution[r["id"]].values())
@@ -383,7 +396,7 @@ def main() -> int:
                 note.append(f"MOVED: removes {hours:.2f}h over {months} month(s)" if r in left_failure
                             else f"MOVED: adds {hours:.2f}h over {months} month(s)")
                 if r["id"] in contribution and not contribution[r["id"]]:
-                    note.append("NOT VISIBLE in fact (no month produced: e.g. no trouble date)")
+                    note.append("NOT VISIBLE in fact (no month produced: trouble_date or ledger_id is NULL)")
             else:
                 note.append("unmoved: " + ("in fact, stays" if in_fact_before else "not in fact, stays out"))
             if r["ledger"] is None:
@@ -431,25 +444,30 @@ def main() -> int:
     if not table_exists:
         print("  cur.monthly_failure_downtime does not exist (nothing to compare)")
     else:
-        print(f"  cells differing from the table: {len(stale)}  (expect 0; non-zero means the table was "
-              f"built before the latest curate run or is otherwise stale)")
-        for cell in sorted(stale, key=lambda c: (-1 if c[0] is None else c[0], c[1]))[:20]:
+        print(f"  cells differing from the table (excluding NULL ledger): {len(stale)}  (expect 0; non-zero means "
+              f"the table was built before the latest curate run or is otherwise stale)")
+        for cell in sorted(stale, key=lambda c: c[1] if c[0] is None else (c[0], c[1]))[:20]:
             print(f"    {str(cell):<28} real table={real.get(cell, 0.0):>10.2f} h   BEFORE (computed now)={before_fact.get(cell, 0.0):>10.2f} h")
+        print(f"  NULL-ledger cells still in the real table: {len(stale_null)} "
+              f"(expected until the table is rebuilt with the IS NOT NULL condition)")
+    print()
+
+    print("=== SQL 変更の効果: IS NOT NULL の前後 (全テーブル) / effect of the SQL change, whole table ===")
+    if not has_ledger_filter:
+        print("  the SQL file does not contain the IS NOT NULL condition, so before = after here")
+    print(f"  failure rows with ledger_id NULL (trouble_date set): {null_rows_total:,}")
+    print(f"  fact without the condition: {len(whole_old):,} cells / {old_hours_total:,.2f} h")
+    print(f"  fact with the condition   : {len(whole_new):,} cells / {new_hours_total:,.2f} h")
+    print(f"  cells dropped by the condition: {len(dropped):,} / {dropped_hours:,.2f} h "
+          + (f"({dropped_hours / old_hours_total:.1%} of hours before), months {min(dropped_months)} .. {max(dropped_months)}"
+             if dropped and old_hours_total else ""))
+    print(f"  dropped cells that are NOT NULL-ledger: {len(dropped_non_null)}  (expect 0)")
+    print(f"  remaining cells whose hours changed   : {len(changed_other)}  (expect 0)")
     print()
 
     print("=== 追加の観察 / side observations ===")
-    print(f"  rows containing セル交換 with ledger_id NULL: {sum(1 for r in rows if r['ledger'] is None)}")
-    if null_ledger_in_table is not None:
-        print(f"  real fact table has a NULL-ledger pooled row (in scope checked): {null_ledger_in_table}")
-    print(f"  whole table: failure rows with ledger_id NULL (trouble_date set): {null_rows_total:,}, "
-          f"pooled into (NULL, month) cells: {len(null_pool):,} cells / {null_hours_total:,.2f} h")
-    print(f"  whole fact (all devices): {whole_cells_total:,} cells / {whole_hours_total:,.2f} h; "
-          f"NULL pool share: {null_hours_total / whole_hours_total:.1%} of hours"
-          if whole_hours_total else "  whole fact is empty")
-    if null_months:
-        print(f"  NULL pool months range: {null_months[0]} .. {null_months[-1]} ({len(null_months)} cells)")
-    print("  (monthly_fact_template.md §6/§7 requires medical_device_ledger_id IS NOT NULL in aggregates. "
-          "See test_repair_with_null_ledger_id_is_excluded.)")
+    print(f"  rows containing セル交換 with ledger_id NULL: {sum(1 for r in rows if r['ledger'] is None)} "
+          f"(these are outside the fact now, whatever their classification)")
     print()
 
     if args.csv:
@@ -462,7 +480,7 @@ def main() -> int:
             w.writerows(rows)
         print(f"Wrote {len(rows)} rows to {args.csv}")
 
-    return 1 if (unexplained or joined_failure) else 0
+    return 1 if (unexplained or joined_failure or dropped_non_null or changed_other) else 0
 
 
 if __name__ == "__main__":

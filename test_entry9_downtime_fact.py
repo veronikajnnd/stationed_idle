@@ -290,28 +290,19 @@ def test_repair_without_trouble_date_is_excluded(conn):
 # --- 6. 台帳に紐付かない修理 (medical_device_ledger_id が NULL) は集計に入れない ---
 # --- 6. A repair not linked to the ledger (ledger_id NULL) is not aggregated ---
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="known hole: monthly_fact_template.md section 6/7 says rows with NULL ledger_id are not "
-           "aggregated; fact behavior not yet decided with Miyazawa-san (reported in the worklog)",
-)
 def test_repair_with_null_ledger_id_is_excluded(conn):
     """出典: monthly_fact_template.md §6/§7 (ADR-2026-09-09 の適用までは、集計のたびに
-    medical_device_ledger_id IS NOT NULL を明示する)。
+    medical_device_ledger_id IS NOT NULL を明示する)。台帳に紐付かない修理は、どの機器のダウンタイム
+    でもないので、fact に (NULL, 月) という行として出てはいけない。
 
-    既知の穴として xfail(strict=True) で残す。文書では「台帳に紐付かない修理は集計しない」と決まっているが、
-    今の fact では NULL の修理が1つの「機器」(NULL, 月) にまとまって出てしまい、この test は赤になる。
-    扱いは Miyazawa-san の判断待ち。strict なので、将来 NULL が除外されると XPASS で失敗する。その時が
-    xfail を外す合図。
+    ADR-2026-09-09 が適用されて列が NOT NULL になれば、この条件は SQL からも、この test からも外してよい。
 
     Source: monthly_fact_template.md section 6/7 (until ADR-2026-09-09 is applied, write
-    medical_device_ledger_id IS NOT NULL explicitly in every aggregate).
+    medical_device_ledger_id IS NOT NULL explicitly in every aggregate). A repair not linked to the
+    ledger is the downtime of no device, so it must not appear as a (NULL, month) row in the fact.
 
-    Kept as a known hole via xfail(strict=True). The documents say a repair not linked to the ledger
-    is not aggregated, but the fact currently pools every NULL-ledger repair into one fake "device"
-    (NULL, month), so this test fails. How to handle it is Miyazawa-san's call. Being strict, the
-    test XPASSes (and so fails) once NULL rows are excluded, which is the signal to remove the xfail
-    marker."""
+    Once ADR-2026-09-09 is applied and the column is NOT NULL, the condition can be dropped from the
+    SQL and this test can be dropped with it."""
     _insert(conn, [{"ledger": None, "trouble": _dt("2026-03-10 08:00"),
                     "completion": _dt("2026-03-10 18:00"), "is_failure": True}])
     assert _fact(conn) == {}

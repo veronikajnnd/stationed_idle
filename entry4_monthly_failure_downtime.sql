@@ -241,8 +241,23 @@ WITH real_failure_repairs AS (
         r.is_completed,
         r.calculated_downtime_hours
     FROM cur.medical_device_repair_history r
+    
+    -- REVISED 2026-10-05 (task12, entry 9): rows whose medical_device_ledger_id
+    -- is NULL are excluded, as monthly_fact_template.md section 6/7 requires:
+    -- until ADR-2026-09-09 is applied, every aggregate writes
+    -- medical_device_ledger_id IS NOT NULL explicitly. Without it these rows
+    -- were pooled into one (NULL, month) group, counted as downtime of no
+    -- device. Once the ADR is applied and the column is NOT NULL, this
+    -- condition can be removed.
+    -- 2026-10-05 修正（task12、entry 9）: medical_device_ledger_id が NULL の
+    -- 行は除外する。monthly_fact_template.md の6/7節が、ADR-2026-09-09 が
+    -- 適用されるまでは集計のたびに medical_device_ledger_id IS NOT NULL を
+    -- 明示するよう求めている。無いと、そうした行が (NULL, 月) の1グループ
+    -- にまとまり、どの機器のものでもないダウンタイムとして数えられていた。
+    -- ADR の適用後に列が NOT NULL になれば、この条件は外してよい。
     WHERE
         r.calculated_trouble_date IS NOT NULL
+        AND r.medical_device_ledger_id IS NOT NULL
         AND r.is_failure = true
 ),
 
