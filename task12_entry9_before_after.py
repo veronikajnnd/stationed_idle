@@ -135,6 +135,7 @@ _ROWS_SQL = text(
         calculated_completion_date,
         is_completed,
         is_failure,
+        calculated_downtime_hours,
         repair_category, event_note, failure_reason, work_note, repair_result
     FROM cur.medical_device_repair_history
     WHERE (
@@ -215,7 +216,7 @@ def main() -> int:
         # --- 1. セル交換を含む全行を集め、before/after の分類を出す (動いた行も動かない行も) ---
         # --- 1. Collect every row containing セル交換 and classify it before/after ---
         rows: List[dict] = []
-        for (hid, ledger, trouble, completion, is_completed, stored_is_failure,
+        for (hid, ledger, trouble, completion, is_completed, stored_is_failure, stored_hours,
              cat, ev, fr, wn, rr) in fetched:
             if not _contains_cell_exchange(cat, ev, fr, wn, rr):
                 continue
@@ -224,7 +225,7 @@ def main() -> int:
             rows.append({
                 "id": hid, "ledger": ledger, "trouble": trouble, "completion": completion,
                 "is_completed": is_completed, "stored_is_failure": bool(stored_is_failure),
-                "category": cat,
+                "stored_hours": stored_hours, "category": cat,
                 "before_cls": b_cls, "before_rule": b_rule,
                 "after_cls": a_cls, "after_rule": a_rule, "after_matched": a_matched,
                 "before_is_failure": b_cls == FAILURE, "after_is_failure": a_cls == FAILURE,
@@ -312,13 +313,23 @@ def main() -> int:
             if abs(a - expected) > tol:
                 unexplained.append(cell)
 
+        # 時間は変わらなくても「セル (行) 自体が消える」ことがある (0.00h のセル)。時間の差だけを見ると
+        # これを見落とすので、存在の差を別に数える。
+        # A cell can vanish even when no hours change (a 0.00 h cell). Counting only hour differences
+        # would miss that, so the difference in existence is counted separately.
+        vanished = sorted(
+            (c for c in before_fact if c not in after_fact),
+            key=lambda c: (-1 if c[0] is None else c[0], c[1]),
+        )
+        appeared = [c for c in after_fact if c not in before_fact]
+
         # --- 7. 実際の cur.monthly_failure_downtime が、今 BEFORE と一致しているか (古くないか) ---
         # --- 7. Does the real cur.monthly_failure_downtime currently equal BEFORE (is it stale)? ---
         table_exists = conn.execute(text("SELECT to_regclass('cur.monthly_failure_downtime') IS NOT NULL")).scalar()
         stale: List[_Cell] = []
         null_ledger_in_table: Optional[bool] = None
+        real: Dict[_Cell, float] = {}
         if table_exists:
-            real: Dict[_Cell, float] = {}
             rows_real = conn.execute(
                 text(f"""SELECT medical_device_ledger_id, month_start, downtime_hours
                          FROM cur.monthly_failure_downtime h
@@ -346,6 +357,14 @@ def main() -> int:
             _source_sql("h.medical_device_ledger_id IS NULL", "h.is_failure"),
         )
         null_hours_total = sum(null_pool.values())
+
+        # 比較用: fact 全体 (全機器) の合計時間とセル数。NULL のプールが全体のどれくらいかを見る。
+        # For scale: total hours and cell count of the whole fact (all devices), to see how large the
+        # NULL pool is relative to it.
+        whole_fact = _run_fact(conn, fact_select, _source_sql("true", "h.is_failure"))
+        whole_hours_total = sum(whole_fact.values())
+        whole_cells_total = len(whole_fact)
+        null_months = sorted(c[1] for c in null_pool)
 
     # ================= 出力 / Output =================
     print("=== セル交換を含む全行 (動いた行 / 動かない行) / all rows containing セル交換 ===")
@@ -375,6 +394,8 @@ def main() -> int:
                 note.append("still-open")
             print(f"  id={r['id']} ledger={r['ledger']} category={r['category']!r} "
                   f"{r['before_cls']}->{r['after_cls']} [{'; '.join(note)}]")
+            print(f"      trouble={r['trouble']} completion={r['completion']} "
+                  f"stored calculated_downtime_hours={r['stored_hours']}")
         print()
 
     removed_total = sum(removed.values())
@@ -384,6 +405,11 @@ def main() -> int:
     print(f"  of those leaving failure, NOT visible in the fact: {len(invisible)}")
     print(f"  (device, month) cells changed: {len(changed_cells)}")
     print(f"  total downtime hours removed : {removed_total:,.2f}")
+    zero_vanished = [c for c in vanished if before_fact[c] == 0.0]
+    print(f"  cells that exist BEFORE but not AFTER: {len(vanished)} "
+          f"(of which 0.00 h cells: {len(zero_vanished)}); cells that appear AFTER only: {len(appeared)} (expect 0)")
+    for cell in vanished:
+        print(f"    vanishes: {str(cell):<28} before={before_fact[cell]:.2f} h, rows={touching.get(cell, [])}")
     print()
     if changed_cells:
         print("  cell (ledger, month) | before -> after | removed by rows")
@@ -408,7 +434,7 @@ def main() -> int:
         print(f"  cells differing from the table: {len(stale)}  (expect 0; non-zero means the table was "
               f"built before the latest curate run or is otherwise stale)")
         for cell in sorted(stale, key=lambda c: (-1 if c[0] is None else c[0], c[1]))[:20]:
-            print(f"    {cell}")
+            print(f"    {str(cell):<28} real table={real.get(cell, 0.0):>10.2f} h   BEFORE (computed now)={before_fact.get(cell, 0.0):>10.2f} h")
     print()
 
     print("=== 追加の観察 / side observations ===")
@@ -417,6 +443,11 @@ def main() -> int:
         print(f"  real fact table has a NULL-ledger pooled row (in scope checked): {null_ledger_in_table}")
     print(f"  whole table: failure rows with ledger_id NULL (trouble_date set): {null_rows_total:,}, "
           f"pooled into (NULL, month) cells: {len(null_pool):,} cells / {null_hours_total:,.2f} h")
+    print(f"  whole fact (all devices): {whole_cells_total:,} cells / {whole_hours_total:,.2f} h; "
+          f"NULL pool share: {null_hours_total / whole_hours_total:.1%} of hours"
+          if whole_hours_total else "  whole fact is empty")
+    if null_months:
+        print(f"  NULL pool months range: {null_months[0]} .. {null_months[-1]} ({len(null_months)} cells)")
     print("  (monthly_fact_template.md §6/§7 requires medical_device_ledger_id IS NOT NULL in aggregates. "
           "See test_repair_with_null_ledger_id_is_excluded.)")
     print()
