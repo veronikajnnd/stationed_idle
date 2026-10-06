@@ -31,6 +31,16 @@ fact) on real data.
     SELECT body is extracted and run as a plain SELECT with the source table swapped out. No table
     is created, written, or dropped. The fact logic is read from the single SQL file, never copied.
 
+効果の分け方 / How the effects are separated (3 つの変更を 1 つずつ分けて数える / three changes, counted one by one):
+    1. 再分類 (commit3, セル交換): 動いた行ごとの寄与。00:00 ルールあり / なしの両方を出す
+       Reclassification: per moved row, with and without the 00:00 rule
+    2. 00:00 ルール (2026-10-06): 全テーブルで、ルールあり / なしの fact を比べる
+       The 00:00 rule: the whole-table fact with vs without the rule
+    3. IS NOT NULL (ledger_id が NULL の行の除外): 全テーブルで、条件あり / なしの fact を比べる
+       IS NOT NULL (excluding rows with NULL ledger_id): the whole-table fact with vs without it
+    「ルールなし」は、SQL の2つの時刻 (params CTE) を 00:00:00 にして作る。SQL の別コピーは持たない。
+    "Without the rule" is built by setting the SQL's two times (params CTE) to 00:00:00. No second copy of the SQL.
+
 不変条件 / Invariant checked (test_entry9_downtime_fact.py の test 7 と同じ考え方):
     すべての (機器, 月) について   AFTER = BEFORE - (failure から外れた行が、その月に持っていた分)
     「failure から外れた行が持っていた分」は、その行だけを元テーブルにして同じ SQL を回して得る。
@@ -154,6 +164,34 @@ _Cell = Tuple[Optional[int], str]  # (medical_device_ledger_id, 'YYYY-MM')
 # The condition added to the SQL (removed in text to build the pre-change SQL for the comparison).
 _LEDGER_FILTER = "AND r.medical_device_ledger_id IS NOT NULL"
 
+# 日付だけの修理時刻のルール (2026-10-06) の2つの時刻は、SQL の params CTE から読む。ここには書かない。
+# The two times of the date-only repair time rule (2026-10-06) are read from the SQL's params CTE.
+# They are not written here.
+_START_TIME_RE = re.compile(r"TIME\s+'([0-9:]+)'\s+AS\s+date_only_start_time", re.IGNORECASE)
+_END_TIME_RE = re.compile(r"TIME\s+'([0-9:]+)'\s+AS\s+date_only_end_time", re.IGNORECASE)
+
+
+def _rule_times(fact_select: str) -> Optional[Tuple[str, str]]:
+    """SQL の params CTE から (開始に使う時刻, 完了に使う時刻) を返す。ルールが無い SQL なら None。
+
+    Return (start fill time, completion fill time) from the SQL's params CTE, or None when the SQL has
+    no such rule."""
+    m_start = _START_TIME_RE.search(fact_select)
+    m_end = _END_TIME_RE.search(fact_select)
+    if m_start and m_end:
+        return m_start.group(1), m_end.group(1)
+    return None
+
+
+def _without_rule(fact_select: str) -> str:
+    """ルールを無効にした SQL を返す。2つの時刻を 00:00:00 にすると、「00:00:00 を 00:00:00 に置きかえる」
+    ことになり、置きかえが何も変えない (ルール導入前と同じ計算になる)。
+
+    Return the SQL with the rule neutralized. Setting both times to 00:00:00 makes the replacement
+    "replace 00:00:00 by 00:00:00", which changes nothing (the same calculation as before the rule)."""
+    out = _START_TIME_RE.sub("TIME '00:00:00' AS date_only_start_time", fact_select)
+    return _END_TIME_RE.sub("TIME '00:00:00' AS date_only_end_time", out)
+
 
 def _source_sql(
     ids_filter: str, is_failure_expr: str
@@ -205,6 +243,9 @@ def main() -> int:
     load_dictionary.cache_clear()
 
     fact_select = load_fact_select(args.sql)
+    rule_times = _rule_times(fact_select)
+    has_rule = rule_times is not None
+    no_rule_select = _without_rule(fact_select) if has_rule else fact_select
 
     if args.db_url:
         db_url = args.db_url
@@ -276,6 +317,10 @@ def main() -> int:
         )
         before_fact = _run_fact(conn, fact_select, _source_sql(scope, "h.is_failure"))
         after_fact = _run_fact(conn, fact_select, _source_sql(scope, after_expr))
+        # 実テーブルとの比較用: ルール導入前の計算での BEFORE (実テーブルは古い SQL で作られているため)
+        # For the real-table comparison: BEFORE with the pre-rule calculation (the real table was built
+        # with the older SQL)
+        before_fact_nr = _run_fact(conn, no_rule_select, _source_sql(scope, "h.is_failure"))
 
         # --- 5. 動いた行ごとの寄与: その行だけを元テーブルにして同じ SQL を回す ---
         # --- 5. Per-row contribution: run the same SQL with only that row as the source ---
@@ -283,6 +328,15 @@ def main() -> int:
         for r in left_failure + joined_failure:
             contribution[r["id"]] = _run_fact(
                 conn, fact_select,
+                _source_sql(f"h.medical_device_repair_history_id = {int(r['id'])}", "true"),
+            )
+        # 同じ行の寄与を、ルールなしの計算でも出す (再分類の効果とルールの効果を分けて見るため)
+        # The same rows' contribution under the pre-rule calculation (to separate the effect of the
+        # reclassification from the effect of the rule)
+        contribution_nr: Dict[int, Dict[_Cell, float]] = {}
+        for r in left_failure + joined_failure:
+            contribution_nr[r["id"]] = _run_fact(
+                conn, no_rule_select,
                 _source_sql(f"h.medical_device_repair_history_id = {int(r['id'])}", "true"),
             )
 
@@ -332,6 +386,7 @@ def main() -> int:
         table_exists = conn.execute(text("SELECT to_regclass('cur.monthly_failure_downtime') IS NOT NULL")).scalar()
         stale: List[_Cell] = []
         stale_null: List[_Cell] = []
+        stale_vs_new: List[_Cell] = []
         null_ledger_in_table: Optional[bool] = None
         real: Dict[_Cell, float] = {}
         if table_exists:
@@ -342,9 +397,13 @@ def main() -> int:
             ).fetchall()
             for ledger, month_start, hours in rows_real:
                 real[(ledger, month_start.strftime("%Y-%m"))] = float(hours)
-            for cell in set(real) | set(before_fact):
-                if abs(real.get(cell, 0.0) - before_fact.get(cell, 0.0)) > 0.011:
+            for cell in set(real) | set(before_fact_nr):
+                if abs(real.get(cell, 0.0) - before_fact_nr.get(cell, 0.0)) > 0.011:
                     stale.append(cell)
+            # 参考: 実テーブルが今の SQL (ルールあり) で作られていた場合に差が出るセル数
+            # For reference: cells that would differ if the table were built with the current SQL (rule on)
+            stale_vs_new = [c for c in set(real) | set(before_fact)
+                            if c[0] is not None and abs(real.get(c, 0.0) - before_fact.get(c, 0.0)) > 0.011]
             null_ledger_in_table = any(c[0] is None for c in real)
             # NULL ledger のセルは、IS NOT NULL を足した SQL で作り直すと消える。実テーブルが古い SQL で
             # 作られていれば残っているので、ここで差として出るのは想定内。別に数える。
@@ -378,6 +437,53 @@ def main() -> int:
         new_hours_total = sum(whole_new.values())
         dropped_months = [c[1] for c in dropped]
 
+        # --- 9. 00:00 ルールそのものの効果: ルールあり / なしで、fact 全体がどう変わるか ---
+        # 2つの時刻を 00:00:00 にして「ルールなし」の SQL を作り、同じ全行に対して両方を回す。
+        # IS NOT NULL の条件はどちらにも入っているので、ルールだけの差になる。
+        # --- 9. Effect of the 00:00 rule itself: how the whole fact changes with vs without the rule.
+        # "Without the rule" is the SQL with both times set to 00:00:00; both are run over all rows.
+        # The IS NOT NULL condition is in both, so the difference is the rule alone.
+        whole_nr = _run_fact(conn, no_rule_select, _source_sql("true", "h.is_failure")) if has_rule else whole_new
+        rule_changed = sorted(
+            (c for c in set(whole_new) | set(whole_nr)
+             if abs(whole_new.get(c, 0.0) - whole_nr.get(c, 0.0)) > 0.011),
+            key=lambda c: (c[0], c[1]),
+        )
+        rule_hours_delta = sum(whole_new.values()) - sum(whole_nr.values())
+        rule_cells_new_only = [c for c in whole_new if c not in whole_nr]
+        rule_cells_old_only = [c for c in whole_nr if c not in whole_new]
+        composition = None
+        if has_rule:
+            fs, fe = rule_times
+            composition = conn.execute(text(f"""
+                SELECT
+                    count(*)                                                    AS rows_in_scope,
+                    count(*) FILTER (WHERE s0 AND e0)                           AS both_date_only,
+                    count(*) FILTER (WHERE s0 AND NOT e0)                       AS start_only,
+                    count(*) FILTER (WHERE NOT s0 AND e0)                       AS end_only,
+                    count(*) FILTER (WHERE has_end AND adj_end < adj_start)     AS end_before_start,
+                    count(*) FILTER (WHERE has_end AND adj_end < adj_start
+                                     AND NOT (raw_end < raw_start))             AS newly_end_before_start
+                FROM (
+                    SELECT
+                        COALESCE(r.calculated_trouble_date::time = TIME '00:00:00', false)    AS s0,
+                        COALESCE(r.calculated_completion_date::time = TIME '00:00:00', false) AS e0,
+                        (r.is_completed AND r.calculated_completion_date IS NOT NULL)          AS has_end,
+                        r.calculated_trouble_date                                              AS raw_start,
+                        r.calculated_completion_date                                           AS raw_end,
+                        CASE WHEN r.calculated_trouble_date::time = TIME '00:00:00'
+                             THEN r.calculated_trouble_date::date + TIME '{fs}'
+                             ELSE r.calculated_trouble_date END                                AS adj_start,
+                        CASE WHEN r.calculated_completion_date::time = TIME '00:00:00'
+                             THEN r.calculated_completion_date::date + TIME '{fe}'
+                             ELSE r.calculated_completion_date END                             AS adj_end
+                    FROM cur.medical_device_repair_history r
+                    WHERE r.is_failure = true
+                      AND r.calculated_trouble_date IS NOT NULL
+                      AND r.medical_device_ledger_id IS NOT NULL
+                ) t
+            """)).one()
+
     # ================= 出力 / Output =================
     print("=== セル交換を含む全行 (動いた行 / 動かない行) / all rows containing セル交換 ===")
     by_after_rule: Dict[str, List[dict]] = defaultdict(list)
@@ -393,8 +499,10 @@ def main() -> int:
             if moved:
                 hours = sum(contribution[r["id"]].values())
                 months = len(contribution[r["id"]])
-                note.append(f"MOVED: removes {hours:.2f}h over {months} month(s)" if r in left_failure
-                            else f"MOVED: adds {hours:.2f}h over {months} month(s)")
+                hours_nr = sum(contribution_nr[r["id"]].values())
+                note.append(f"MOVED: removes {hours:.2f}h over {months} month(s) (without the 00:00 rule: {hours_nr:.2f}h)"
+                            if r in left_failure
+                            else f"MOVED: adds {hours:.2f}h over {months} month(s) (without the 00:00 rule: {hours_nr:.2f}h)")
                 if r["id"] in contribution and not contribution[r["id"]]:
                     note.append("NOT VISIBLE in fact (no month produced: trouble_date or ledger_id is NULL)")
             else:
@@ -417,7 +525,8 @@ def main() -> int:
     invisible = [r for r in left_failure if not contribution[r['id']]]
     print(f"  of those leaving failure, NOT visible in the fact: {len(invisible)}")
     print(f"  (device, month) cells changed: {len(changed_cells)}")
-    print(f"  total downtime hours removed : {removed_total:,.2f}")
+    removed_total_nr = sum(sum(contribution_nr[r["id"]].values()) for r in left_failure)
+    print(f"  total downtime hours removed : {removed_total:,.2f}  (without the 00:00 rule: {removed_total_nr:,.2f})")
     zero_vanished = [c for c in vanished if before_fact[c] == 0.0]
     print(f"  cells that exist BEFORE but not AFTER: {len(vanished)} "
           f"(of which 0.00 h cells: {len(zero_vanished)}); cells that appear AFTER only: {len(appeared)} (expect 0)")
@@ -447,9 +556,11 @@ def main() -> int:
         print(f"  cells differing from the table (excluding NULL ledger): {len(stale)}  (expect 0; non-zero means "
               f"the table was built before the latest curate run or is otherwise stale)")
         for cell in sorted(stale, key=lambda c: c[1] if c[0] is None else (c[0], c[1]))[:20]:
-            print(f"    {str(cell):<28} real table={real.get(cell, 0.0):>10.2f} h   BEFORE (computed now)={before_fact.get(cell, 0.0):>10.2f} h")
+            print(f"    {str(cell):<28} real table={real.get(cell, 0.0):>10.2f} h   BEFORE (computed now, pre-rule calculation)={before_fact_nr.get(cell, 0.0):>10.2f} h")
         print(f"  NULL-ledger cells still in the real table: {len(stale_null)} "
               f"(expected until the table is rebuilt with the IS NOT NULL condition)")
+        print(f"  cells that would differ if the table were built with the current SQL (rule on), "
+              f"excluding NULL ledger: {len(stale_vs_new):,}  (expected: the cells touched by the 00:00 rule, see below)")
     print()
 
     print("=== SQL 変更の効果: IS NOT NULL の前後 (全テーブル) / effect of the SQL change, whole table ===")
@@ -463,6 +574,23 @@ def main() -> int:
              if dropped and old_hours_total else ""))
     print(f"  dropped cells that are NOT NULL-ledger: {len(dropped_non_null)}  (expect 0)")
     print(f"  remaining cells whose hours changed   : {len(changed_other)}  (expect 0)")
+    print()
+
+    print("=== 00:00 ルールの効果 (全テーブル) / effect of the 00:00 rule, whole table ===")
+    if not has_rule:
+        print("  the SQL file does not contain the date-only rule, so before = after here")
+    else:
+        print(f"  times used: start 00:00 -> {rule_times[0]}, completion 00:00 -> {rule_times[1]}")
+        print(f"  fact without the rule: {len(whole_nr):,} cells / {sum(whole_nr.values()):,.2f} h")
+        print(f"  fact with the rule   : {len(whole_new):,} cells / {sum(whole_new.values()):,.2f} h")
+        print(f"  cells whose hours changed: {len(rule_changed):,}; total hours change: {rule_hours_delta:+,.2f} h; "
+              f"cells only with the rule: {len(rule_cells_new_only):,}; cells only without it: {len(rule_cells_old_only):,}")
+        print(f"  failure repairs in the fact's scope: {composition.rows_in_scope:,}")
+        print(f"    both sides date-only : {composition.both_date_only:,}")
+        print(f"    start date-only only : {composition.start_only:,}")
+        print(f"    end date-only only   : {composition.end_only:,}")
+        print(f"  completed repairs whose end is before the start after the replacement (counted as 0 h): "
+              f"{composition.end_before_start:,} (of which caused by the rule: {composition.newly_end_before_start:,})")
     print()
 
     print("=== 追加の観察 / side observations ===")

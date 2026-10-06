@@ -254,11 +254,14 @@ def test_repair_spanning_two_months_splits_per_month(conn):
 # --- 4. A still-open repair is included, capped at month end (or now), never excluded ---
 
 def test_still_open_repair_is_included_and_capped(conn):
-    """出典: poc_metric_definition.md の「未完了レコードのルール」(2026-09-03)。
-    先月1日 0:00 から未完了の修理は、先月は満月分、今月は「今」までで切られた行が出る。
+    """出典: poc_metric_definition.md の「未完了レコードのルール」(2026-09-03) と、日付だけの修理時刻の
+    ルール (2026-10-06)。先月1日 0:00 から未完了の修理は、先月は月末まで、今月は「今」までで切られた行が出る。
+    開始がちょうど 0:00 なので 9:00 に置きかえられ、先月の時間は満月分より 9 時間短い。
 
-    Source: the still-open record rule (2026-09-03). A repair open since the 1st of last month
-    yields a full month for last month and a row for this month capped at now."""
+    Source: the still-open record rule (2026-09-03) and the date-only repair time rule (2026-10-06).
+    A repair open since the 1st of last month yields last month up to month end and a row for this month
+    capped at now. The start is exactly 00:00, so it is replaced by 09:00 and last month's hours are 9 h
+    short of a full month."""
     this_month, last_month = conn.execute(
         text("SELECT date_trunc('month', now())::timestamp, "
              "(date_trunc('month', now()) - interval '1 month')::timestamp")
@@ -268,7 +271,10 @@ def test_still_open_repair_is_included_and_capped(conn):
     fact = _fact(conn)
 
     days_last_month = (this_month - last_month).days
-    assert fact[(1, last_month.strftime("%Y-%m"))] == pytest.approx(days_last_month * 24.0)
+    # 開始 00:00 -> 9:00 の置きかえで、満月分から 9 時間引く (2026-10-06 のルールが決めた変更)
+    # The 00:00 -> 09:00 start replacement takes 9 h off a full month (the change decided by the
+    # 2026-10-06 rule)
+    assert fact[(1, last_month.strftime("%Y-%m"))] == pytest.approx(days_last_month * 24.0 - 9.0)
 
     elapsed_hours = conn.execute(
         text("SELECT extract(epoch FROM (now()::timestamp - date_trunc('month', now())::timestamp)) / 3600.0")
@@ -335,3 +341,117 @@ def test_flipping_one_row_changes_only_its_own_device_months(conn):
     assert before[(2, "2026-04")] == pytest.approx(36.0)
     assert (2, "2026-03") not in after and (2, "2026-04") not in after
     assert {k: v for k, v in after.items() if k[0] == 1} == {k: v for k, v in before.items() if k[0] == 1}
+
+
+# =====================================================================================
+# 8. 日付だけの修理時刻のルール (poc_metric_definition.md, 2026-10-06, Miyazawa-san の決定)
+# 8. Date-only repair time rule (poc_metric_definition.md, 2026-10-06, Miyazawa-san's decision)
+#
+# 開始・完了の「時刻がちょうど 00:00:00 の側だけ」を、開始 → 9:00、完了 → 17:00 に置きかえてから
+# 計算する。時刻が入っている側はそのまま使う。置きかえは fact の SQL の中だけ。
+# Only the side whose time is exactly 00:00:00 is replaced (start -> 09:00, completion -> 17:00)
+# before hours are calculated; a side with a recorded time is used as is. Inside the fact SQL only.
+#
+# 期待値は、文書に書かれた例 (2/13 00:00 -> 2/13 00:00 = 8h など) と、ルールの文言から取った。
+# Expected values come from the examples written in the document and from the wording of the rule.
+# =====================================================================================
+
+def _hours_of(conn, trouble, completion, ledger=1):
+    """1 件の完了済み修理を入れて、{(機器, 月): 時間} を返す。
+
+    Insert one completed repair and return {(device, month): hours}."""
+    _insert(conn, [{"ledger": ledger, "trouble": _dt(trouble), "completion": _dt(completion),
+                    "is_failure": True}])
+    return _fact(conn)
+
+
+def test_date_only_same_day_repair_counts_8_hours(conn):
+    """出典: ルールの例「2/13 00:00 -> 2/13 00:00 = 8 h」。開始 9:00、完了 17:00。
+    Source: the document's example, 2/13 00:00 -> 2/13 00:00 = 8 h (start 09:00, completion 17:00)."""
+    assert _hours_of(conn, "2026-02-13 00:00", "2026-02-13 00:00") == {(1, "2026-02"): pytest.approx(8.0)}
+
+
+def test_date_only_repair_ending_next_day_counts_32_hours(conn):
+    """出典: ルールの例「2/13 00:00 -> 2/14 00:00 = 32 h (今までは 24 h)」。2/13 9:00 から 2/14 17:00 まで。
+    Source: the document's example, 2/13 00:00 -> 2/14 00:00 = 32 h (was 24 h): 2/13 09:00 to 2/14 17:00."""
+    assert _hours_of(conn, "2026-02-13 00:00", "2026-02-14 00:00") == {(1, "2026-02"): pytest.approx(32.0)}
+
+
+@pytest.mark.parametrize(
+    "trouble, completion, expected_hours",
+    [
+        # 出典: ルールの例「2/13 00:00 -> 2/13 11:00 = 2 h」(開始だけ置きかえる)
+        # Source: the document's example, 2/13 00:00 -> 2/13 11:00 = 2 h (only the start is replaced)
+        ("2026-02-13 00:00", "2026-02-13 11:00", 2.0),
+        # 完了に時刻があるまま、開始だけ日付のみで、日をまたぐ場合: 2/13 9:00 から 2/15 12:00 まで
+        # Completion has a time, only the start is date-only, across days: 2/13 09:00 to 2/15 12:00
+        ("2026-02-13 00:00", "2026-02-15 12:00", 51.0),
+    ],
+)
+def test_only_the_date_only_start_is_replaced_by_9am(conn, trouble, completion, expected_hours):
+    """出典: 「置きかえは、それぞれの側で独立に行う」。完了に時刻がある側はそのまま使う。
+    Source: each side is replaced on its own; a side with a recorded time is used as is."""
+    assert _hours_of(conn, trouble, completion) == {(1, "2026-02"): pytest.approx(expected_hours)}
+
+
+def test_only_the_date_only_completion_is_replaced_by_5pm(conn):
+    """出典: 同じ「それぞれの側で独立に」。開始に時刻があり、完了だけ日付のみ: 2/13 10:00 から 2/14 17:00 まで = 31 h。
+    Source: same per-side rule. Start has a time, only the completion is date-only:
+    2/13 10:00 to 2/14 17:00 = 31 h."""
+    assert _hours_of(conn, "2026-02-13 10:00", "2026-02-14 00:00") == {(1, "2026-02"): pytest.approx(31.0)}
+
+
+def test_recorded_time_is_used_as_is_even_if_zero_hours(conn):
+    """出典: ルールの例「2/13 10:30 -> 2/13 10:30 = 0 h (時刻が入っている)」。0 時間 0 分でもそのまま。
+    fact にセル自体が残るかどうかは、文書が決めていないので、ここでは時間だけを見る (セルが無ければ 0 と読む)。
+
+    Source: the document's example, 2/13 10:30 -> 2/13 10:30 = 0 h (time recorded). Whether the cell
+    itself stays in the fact is not decided by the document, so only the hours are checked here
+    (a missing cell reads as 0)."""
+    fact = _hours_of(conn, "2026-02-13 10:30", "2026-02-13 10:30")
+    assert fact.get((1, "2026-02"), 0.0) == pytest.approx(0.0)
+
+
+def test_only_exactly_midnight_counts_as_date_only(conn):
+    """出典: 「時刻がちょうど 00:00:00 の側だけ」。00:00:01 は時刻が入っているので置きかえない。
+    2/13 00:00:01 から 2/13 10:00 まで = 9 時間 59 分 59 秒 (置きかえたなら 1 時間)。
+
+    Source: "exactly 00:00:00". 00:00:01 is a recorded time and is not replaced:
+    2/13 00:00:01 to 2/13 10:00 is 9 h 59 min 59 s (it would be 1 h if replaced)."""
+    fact = _hours_of(conn, "2026-02-13 00:00", "2026-02-13 10:00")  # 比較用: 置きかえあり / for contrast: replaced
+    assert fact == {(1, "2026-02"): pytest.approx(1.0)}
+    _insert(conn, [{"id": 99, "ledger": 2, "trouble": datetime(2026, 2, 13, 0, 0, 1),
+                    "completion": _dt("2026-02-13 10:00"), "is_failure": True}])
+    fact = _fact(conn)
+    assert fact[(2, "2026-02")] == pytest.approx(10.0, abs=0.01)
+
+
+@pytest.mark.parametrize(
+    "trouble, completion",
+    [
+        # 出典: 「置きかえたあと、終わりが始まりより前になる行は 0 時間」 開始 20:00、完了は同じ日の日付のみ (17:00)
+        # Source: "if the end is before the start after the replacement: 0 h". Start 20:00, completion
+        # date-only on the same day (17:00)
+        ("2026-02-13 20:00", "2026-02-13 00:00"),
+        # 開始が日付のみ (9:00)、完了が 8:00 と記録されている
+        # Start date-only (09:00), completion recorded as 08:00
+        ("2026-02-13 00:00", "2026-02-13 08:00"),
+    ],
+)
+def test_end_before_start_after_replacement_is_zero_hours(conn, trouble, completion):
+    """出典: ルールの「置きかえたあと、終わりが始まりより前になる場合は 0 時間」。負の時間にならない。
+    Source: the rule's end-before-start case: 0 h, never negative."""
+    fact = _hours_of(conn, trouble, completion)
+    assert fact.get((1, "2026-02"), 0.0) == pytest.approx(0.0)
+
+
+def test_date_only_repair_across_a_month_boundary_splits_after_replacement(conn):
+    """出典: 「そのあとは今までどおり計算する (月ごとに分ける)」。3/31 00:00 -> 4/1 00:00 は、
+    3/31 9:00 から 4/1 17:00 まで。3月は 3/31 9:00 から 24:00 までの 15 時間、4月は 0:00 から 17:00 までの 17 時間。
+
+    Source: "then everything is calculated as before (split by month)". 3/31 00:00 -> 4/1 00:00 is
+    3/31 09:00 to 4/1 17:00: 15 h in March (09:00 to 24:00) and 17 h in April (00:00 to 17:00)."""
+    assert _hours_of(conn, "2026-03-31 00:00", "2026-04-01 00:00") == {
+        (1, "2026-03"): pytest.approx(15.0),
+        (1, "2026-04"): pytest.approx(17.0),
+    }

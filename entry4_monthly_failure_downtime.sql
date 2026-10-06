@@ -219,7 +219,29 @@
 DROP TABLE IF EXISTS cur.monthly_failure_downtime;
 
 CREATE TABLE cur.monthly_failure_downtime AS
-WITH real_failure_repairs AS (
+WITH params AS (
+    -- Date-only repair time rule (poc_metric_definition.md, 2026-10-06,
+    -- Miyazawa-san's decision). Many repair records carry only a date, so
+    -- their time is exactly 00:00:00. Before hours are calculated, a start
+    -- whose time is exactly 00:00:00 is replaced by date_only_start_time and
+    -- a completion whose time is exactly 00:00:00 is replaced by
+    -- date_only_end_time. Each side is replaced on its own; a recorded time
+    -- is used as is. One value for all facilities. These two values are the
+    -- only place the times are written (to be moved to a config file once
+    -- the location of this SQL is decided).
+    -- 日付だけの修理時刻のルール（poc_metric_definition.md、2026-10-06、
+    -- Miyazawaさんの決定）。修理の記録には日付しか無いものが多く、その時刻は
+    -- ちょうど 00:00:00 になる。時間を計算する前に、開始がちょうど 00:00:00
+    -- なら date_only_start_time に、完了がちょうど 00:00:00 なら
+    -- date_only_end_time に置きかえる。置きかえは開始と完了で別々に行い、
+    -- 時刻が入っている側はそのまま使う。全医療機関で同じ値。この2つの値が
+    -- 時刻を書く唯一の場所（この SQL の置き場所が決まったら設定ファイルへ移す）。
+    SELECT
+        TIME '09:00' AS date_only_start_time,
+        TIME '17:00' AS date_only_end_time
+),
+
+real_failure_repairs AS (
     -- is_real_failure classification: read directly from
     -- cur.medical_device_repair_history.is_failure. This column is
     -- curated by the datacuration-curate pipeline using
@@ -236,12 +258,25 @@ WITH real_failure_repairs AS (
     -- 注記を参照。
     SELECT
         r.medical_device_ledger_id,
-        r.calculated_trouble_date,
-        r.calculated_completion_date,
+        -- Start / completion after the date-only rule (see params above).
+        -- The stored calculated_* columns are not changed; the replacement
+        -- exists only inside this query.
+        -- 日付だけのルール適用後の開始 / 完了（上の params を参照）。保存されている
+        -- calculated_* の列は変えない。置きかえはこのクエリの中だけ。
+        CASE
+            WHEN r.calculated_trouble_date::time = TIME '00:00:00'
+                THEN r.calculated_trouble_date::date + p.date_only_start_time
+            ELSE r.calculated_trouble_date
+        END AS calculated_trouble_date,
+        CASE
+            WHEN r.calculated_completion_date::time = TIME '00:00:00'
+                THEN r.calculated_completion_date::date + p.date_only_end_time
+            ELSE r.calculated_completion_date
+        END AS calculated_completion_date,
         r.is_completed,
         r.calculated_downtime_hours
     FROM cur.medical_device_repair_history r
-    
+    CROSS JOIN params p
     -- REVISED 2026-10-05 (task12, entry 9): rows whose medical_device_ledger_id
     -- is NULL are excluded, as monthly_fact_template.md section 6/7 requires:
     -- until ADR-2026-09-09 is applied, every aggregate writes
@@ -365,6 +400,14 @@ ORDER BY medical_device_ledger_id, month_start;
 --      (summed across the months it touches) against
 --      calculated_downtime_hours, to see whether that column is a plain
 --      date-diff or has some other adjustment baked in.
+--      Since 2026-10-06 (date-only repair time rule, see params above) the
+--      per-record total of this query differs from calculated_downtime_hours
+--      by design for records whose start or completion is exactly 00:00:00,
+--      so compare only records that have a recorded time on both sides.
+--      2026-10-06 以降（日付だけの修理時刻のルール、上の params 参照）は、
+--      開始または完了がちょうど 00:00:00 の記録では、このクエリの1件あたり
+--      合計が calculated_downtime_hours と食い違うのが仕様なので、突き合わせは
+--      両側に時刻が入っている記録だけで行う。
 -- REMOVED 2026-09-08 (task9): the old cross-check 3 (recomputed vs curated
 -- is_failure) no longer applies, since this SQL has nothing of its own left
 -- to recompute — see the file header's 2026-09-08 note for why. The old
