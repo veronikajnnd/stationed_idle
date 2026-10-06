@@ -6,17 +6,70 @@
 -- Entry 5 (*機器別貸出回数[FIXED], rentals per unit) — vertical slice, draft
 -- Entry 5（*機器別貸出回数[FIXED]）— 縦スライス、ドラフト
 -- ============================================================
--- Output: device x hospital x department x month fact table of rental
--- counts. Unlike entry 4 (a duration that can span, and be split across,
--- multiple months), a rental COUNT is a single discrete event -- it is
--- bucketed into the one month it started in, not exploded across every
--- month it touches. See poc_metric_definition.md, entry 5, for the current
--- decision trail.
--- 出力: 機器 x 病院 x 部署 x 月ごとの貸出回数のfactテーブル。entry 4
--- （複数月にまたがり得る、分割が必要な「時間」）と違い、貸出回数は1回起きた
--- ら1回の離散イベント -- 開始した月1つだけに割り当てる。触れた月すべてに
--- 展開する entry 4 のロジックとは異なる。詳しい経緯は
--- poc_metric_definition.md の entry 5 を参照。
+-- Output (since 2026-10-06): one row per rental record per calendar month it
+-- touches, carrying the record's identifier and the rental hours of that
+-- month (rental_hours). There is NO count column: the screen counts rentals
+-- with COUNT(DISTINCT medical_device_rental_history_id) (see
+-- monthly_fact_template.md sections 3 to 5). The hours serve entry 9
+-- (rental headroom, committed time = rental hours + recovery time) and
+-- entries 7/19/33. See poc_metric_definition.md, entry 5 and entry 9, for the
+-- decision trail. The table name is kept as it is; it no longer holds a count.
+-- 出力（2026-10-06 以降）: 貸出レコード x それが触れる暦月ごとに1行。レコードの
+-- 識別子と、その月の貸出時間（rental_hours）を持つ。回数の列は置かない:
+-- 画面側が COUNT(DISTINCT medical_device_rental_history_id) で数える
+-- （monthly_fact_template.md の3〜5節）。時間は entry 9（貸出余力、拘束時間 =
+-- 貸出時間 + リカバリ時間）と entry 7/19/33 のために使う。経緯は
+-- poc_metric_definition.md の entry 5 と entry 9 を参照。テーブル名は変えない
+-- （もう回数は入っていない）。
+--
+-- REVISED 2026-10-06 (task12, entry 9): the fact now follows
+-- monthly_fact_template.md (Miyazawa-san, 2026-09-09), which says entries 4 and
+-- 5 came out in different shapes by guesswork and fixes the shape. Changes:
+--   1. rental_hours added (the column entry 9 needs). A rental spanning
+--      several months now has one row per month, hours cut to that month.
+--   2. medical_device_rental_history_id added as the identifier; the
+--      rental_count column is removed (template section 3: a count is an
+--      answer, not a fact). Rentals are counted on the screen with
+--      COUNT(DISTINCT id), so the same table answers "how many in March" and
+--      "how many this year".
+--   3. The device key is medical_device_ledger_id instead of
+--      client_device_number (template section 6: client_device_number is the
+--      facility's own value and collides across facilities).
+--      medical_device_ledger_id IS NOT NULL is written explicitly until
+--      ADR-2026-09-09 is applied.
+--   4. Hours convention for rentals (date-only records): a return date with
+--      time exactly 00:00:00 means the end of that day, so the return day is
+--      counted in full, as in the template's worked example (3/31 -> 4/2 =
+--      24 h in March + 48 h in April). A start is the beginning of its day. A
+--      time that was recorded is used as is. A rental with no return date is
+--      still open: included, cut at month end and at now, nothing added. The
+--      repair 09:00 / 17:00 rule (2026-10-06) does not apply to rentals.
+--      Cross-check this convention against rental_duration_hours (query 3 in
+--      the validation section below) before trusting it.
+--   5. The old rule "bucket the count into the start month only, no month
+--      explosion" is superseded: the count is now derived from the rows.
+-- 2026-10-06 修正（task12、entry 9）: このfactを monthly_fact_template.md
+-- （Miyazawaさん、2026-09-09）の形に合わせた。同文書は、entry 4 と entry 5 が推測で
+-- 違う形になったと述べ、形を決めている。変更点:
+--   1. rental_hours を追加（entry 9 が必要とする列）。複数の月にまたがる貸出は
+--      月ごとに1行になり、時間はその月に切って入る。
+--   2. 識別子として medical_device_rental_history_id を追加し、rental_count 列を
+--      削除（テンプレートの3節: 回数は事実ではなく答え）。貸出の数は画面側が
+--      COUNT(DISTINCT id) で数える。同じテーブルで「3月は何回」も「今年は何回」も
+--      答えられる。
+--   3. 機器のキーを client_device_number から medical_device_ledger_id に変更
+--      （テンプレートの6節: client_device_number は施設側の値で、施設をまたぐと
+--      衝突する）。ADR-2026-09-09 の適用までは medical_device_ledger_id IS NOT NULL
+--      を明示する。
+--   4. 貸出（日付だけの記録）の時間の決め方: 返却日の時刻がちょうど 00:00:00 なら
+--      「その日の終わり」と読み、返却日の日もまるごと数える（テンプレートの
+--      worked example: 3/31 -> 4/2 = 3月 24 h + 4月 48 h）。開始は、その日の始まり。
+--      時刻が入っていればそのまま使う。返却日が無い貸出は未完了: 除外せず、月末と
+--      「今」で切って含め、何も足さない。修理の 09:00 / 17:00 ルール（2026-10-06）は
+--      貸出には使わない。この決め方は、信頼する前に rental_duration_hours と
+--      突き合わせること（下の検証の3番）。
+--   5. 旧ルール「回数は開始月だけに割り当てる、月に展開しない」は上書き: 回数は
+--      行から導く。
 --
 -- STATUS: this file's grouping/rules follow poc_metric_definition.md
 -- entry 5's Phase2 の定義, which is still marked "draft, pending
@@ -183,24 +236,183 @@ DROP TABLE IF EXISTS cur.monthly_rental_count;
 -- confirmed. If medical_facility_name is ever populated for real, re-check
 -- whether one medical_facility_id can map to multiple names before adding it
 -- back to the GROUP BY.
+-- (2026-10-06: the statement below has no GROUP BY any more; the note above
+-- is kept as the record of why medical_facility_name is not carried.)
+-- （2026-10-06: 下の文には GROUP BY がもう無い。上の注記は、medical_facility_name
+-- を持たない理由の記録として残す。）
 CREATE TABLE cur.monthly_rental_count AS
-SELECT
-    r.client_device_number,
-    r.medical_facility_id,
-    r.recipient_department,
-    date_trunc('month', r.calculated_rental_start_date)::date AS month_start,
-    COUNT(*) AS rental_count
-FROM cur.medical_device_rental_history r
-WHERE r.calculated_rental_start_date IS NOT NULL
-GROUP BY
-    r.client_device_number,
-    r.medical_facility_id,
-    r.recipient_department,
-    date_trunc('month', r.calculated_rental_start_date)
-ORDER BY
-    r.client_device_number,
-    month_start;
+WITH rentals AS (
+    -- One row per rental record. rental_start is the start (a date-only start
+    -- is the beginning of its day). rental_end is the end of the rental: a
+    -- return date whose time is exactly 00:00:00 is date-only, so it means the
+    -- END of that day (the next day 00:00); a recorded time is used as is; no
+    -- return date means the rental is still open, so it runs up to now (the
+    -- still-open record rule, 2026-09-03). The double cast makes this work
+    -- whether the column is a date or a timestamp.
+    -- 貸出レコードごとに1行。rental_start は開始（日付だけの開始は、その日の始まり）。
+    -- rental_end は貸出の終わり: 返却日の時刻がちょうど 00:00:00 なら日付だけの
+    -- 記録なので「その日の終わり」（翌日の 00:00）。時刻が入っていればそのまま。
+    -- 返却日が無ければ未完了なので「今」まで（未完了レコードのルール、2026-09-03）。
+    -- 二重キャストは、列が date でも timestamp でも動くようにするため。
+    SELECT
+        r.medical_device_rental_history_id,
+        r.medical_device_ledger_id,
+        r.medical_facility_id,
+        r.recipient_department,
+        r.calculated_rental_start_date::timestamp AS rental_start,
+        CASE
+            WHEN r.calculated_return_date IS NULL
+                THEN LOCALTIMESTAMP
+            WHEN r.calculated_return_date::timestamp::time = TIME '00:00:00'
+                THEN r.calculated_return_date::date + 1
+            ELSE r.calculated_return_date::timestamp
+        END AS rental_end
+    FROM cur.medical_device_rental_history r
+    -- medical_device_ledger_id IS NOT NULL: monthly_fact_template.md section 6
+    -- until ADR-2026-09-09 is applied (then the column is NOT NULL and this
+    -- condition can be removed). A rental not linked to the ledger is the
+    -- rental time of no device.
+    -- medical_device_ledger_id IS NOT NULL: ADR-2026-09-09 の適用までは
+    -- monthly_fact_template.md の6節に従って明示する（適用後は列が NOT NULL に
+    -- なるので、この条件は外してよい）。台帳に紐付かない貸出は、どの機器の貸出
+    -- 時間でもない。
+    WHERE r.calculated_rental_start_date IS NOT NULL
+      AND r.medical_device_ledger_id IS NOT NULL
+),
 
+-- One row per (rental, calendar month it touches). The series runs from the
+-- start month to the month of the last instant of the rental (rental_end minus
+-- one microsecond, so a rental ending exactly at midnight does not touch the
+-- next month). GREATEST keeps the start month even if the return date is before
+-- the start (a broken record keeps its identifier, with 0 h). A very old
+-- still-open rental produces a row for every month up to now (see the
+-- diagnostic in the validation section).
+-- 貸出 x それが触れる暦月ごとに1行。系列は開始月から、貸出の最後の瞬間の月
+-- （rental_end の1マイクロ秒前。ちょうど 0 時に終わる貸出が翌月に触れないように）
+-- まで。GREATEST で、返却日が開始日より前でも開始月は残る（壊れた記録も識別子を
+-- 失わず、0 時間になる）。非常に古い未完了の貸出は、今月まですべての月に行を
+-- 作る（検証の節の診断を参照）。
+rental_months AS (
+    SELECT
+        x.medical_device_rental_history_id,
+        x.medical_device_ledger_id,
+        x.medical_facility_id,
+        x.recipient_department,
+        x.rental_start,
+        x.rental_end,
+        gs.month_start::date AS month_start,
+        (gs.month_start + interval '1 month') AS month_end
+    FROM rentals x
+    CROSS JOIN LATERAL generate_series(
+        date_trunc('month', x.rental_start),
+        GREATEST(
+            date_trunc('month', x.rental_start),
+            date_trunc('month', x.rental_end - interval '1 microsecond')
+        ),
+        interval '1 month'
+    ) AS gs(month_start)
+)
+
+-- rental_hours: the overlap between [rental_start, rental_end] and the month
+-- [month_start, month_end), in hours, never negative. Rows are unique per
+-- (rental, month) by construction, so no GROUP BY is needed.
+-- rental_hours: [rental_start, rental_end] とその月 [month_start, month_end) の
+-- 重なりを時間で。負にはならない。行は構造上 (貸出, 月) ごとに一意なので
+-- GROUP BY は要らない。
+SELECT
+    medical_device_ledger_id,
+    medical_facility_id,
+    recipient_department,
+    month_start,
+    medical_device_rental_history_id,
+    ROUND(
+        GREATEST(
+            0,
+            EXTRACT(
+                EPOCH FROM (
+                    LEAST(month_end, rental_end)
+                    - GREATEST(month_start::timestamp, rental_start)
+                )
+            ) / 3600.0
+        )::numeric,
+        2
+    ) AS rental_hours
+FROM rental_months
+ORDER BY
+    medical_device_ledger_id,
+    month_start,
+    medical_device_rental_history_id;
+
+-- ============================================================
+-- VALIDATION OF THE SHAPE SINCE 2026-10-06 (monthly_fact_template.md section 4
+-- and 7). Run after building the table. Each query is read-only.
+-- 2026-10-06 以降の形の検証（monthly_fact_template.md の4節と7節）。テーブルを
+-- 作ってから実行する。どのクエリも読み取り専用。
+-- ============================================================
+-- 1. Every rental (with a start date and a ledger id) has at least one row:
+--    the two numbers must be equal. This catches a wrong grain.
+-- 1. 開始日と ledger id を持つ貸出はすべて、少なくとも1行ある: 2つの数字は一致する
+--    はず。粒度の誤りを捕まえられる。（このクエリだけは、旧い形の Option B と同じく
+--    ファイルを実行すると走る。）
+-- This one runs when the file is run, as the old Option B did.
+SELECT
+    (SELECT COUNT(DISTINCT medical_device_rental_history_id) FROM cur.monthly_rental_count) AS fact_rentals,
+    (SELECT COUNT(*) FROM cur.medical_device_rental_history
+     WHERE calculated_rental_start_date IS NOT NULL
+       AND medical_device_ledger_id IS NOT NULL) AS source_rentals;
+--
+-- 2. One row per (rental, month): this must return 0 rows.
+-- 2. 貸出 x 月ごとに1行: 0行が返るはず。
+-- SELECT medical_device_rental_history_id, month_start, COUNT(*)
+-- FROM cur.monthly_rental_count
+-- GROUP BY 1, 2
+-- HAVING COUNT(*) > 1;
+--
+-- 3. Hours convention: for returned rentals, compare the total of the rows of
+--    one rental with the stored rental_duration_hours. "equal" means this SQL
+--    and the stored column agree; "one_day_more" means the stored column does
+--    not count the return day (this SQL counts it, following the template's
+--    worked example); anything else needs a look before trusting the hours.
+-- 3. 時間の決め方: 返却済みの貸出について、1件の行の合計を保存済みの
+--    rental_duration_hours と比べる。equal は、このSQLと保存済みの列が一致。
+--    one_day_more は、保存済みの列は返却日を数えない（このSQLは、テンプレートの
+--    worked example に従って数える）。それ以外は、時間を信頼する前に確認が必要。
+-- WITH f AS (
+--     SELECT medical_device_rental_history_id AS id, SUM(rental_hours) AS fact_hours
+--     FROM cur.monthly_rental_count
+--     GROUP BY 1
+-- )
+-- SELECT
+--     COUNT(*) AS returned_rentals,
+--     COUNT(*) FILTER (WHERE abs(f.fact_hours - r.rental_duration_hours) < 0.02) AS equal,
+--     COUNT(*) FILTER (WHERE abs(f.fact_hours - 24 - r.rental_duration_hours) < 0.02) AS one_day_more,
+--     COUNT(*) FILTER (WHERE r.rental_duration_hours IS NULL) AS stored_hours_null
+-- FROM cur.medical_device_rental_history r
+-- JOIN f ON f.id = r.medical_device_rental_history_id
+-- WHERE r.calculated_return_date IS NOT NULL;
+--
+-- 4. Diagnostic (same idea as entry 4's diagnostic B): still-open rentals by
+--    start year. A very old still-open rental produces one row per month up to
+--    now, so this shows how many rows come from open rentals.
+-- 4. 診断（entry 4 の診断Bと同じ考え方）: 未完了の貸出を開始年ごとに数える。
+--    非常に古い未完了の貸出は今月まで毎月1行を作るので、未完了の貸出から来る
+--    行がどれだけあるかを見る。
+-- SELECT EXTRACT(YEAR FROM calculated_rental_start_date) AS start_year, COUNT(*) AS open_rentals
+-- FROM cur.medical_device_rental_history
+-- WHERE calculated_return_date IS NULL
+--   AND calculated_rental_start_date IS NOT NULL
+--   AND medical_device_ledger_id IS NOT NULL
+-- GROUP BY 1
+-- ORDER BY 1;
+--
+-- ============================================================
+-- OLD SHAPE (until 2026-10-05), kept as a record. The queries below refer to
+-- rental_count and client_device_number, which no longer exist in the table,
+-- so they do not run against the new table as they are.
+-- 旧い形（2026-10-05 まで）。記録として残す。下のクエリは、もう存在しない
+-- rental_count と client_device_number を参照しているので、そのままでは新しい
+-- テーブルに対して動かない。
+-- ============================================================
 -- VALIDATION (per poc_metric_definition.md entry 5's どう確かめるか,
 -- recommendation: B first, cheap and catches systemic bugs, then A on a
 -- handful of devices):
@@ -218,9 +430,13 @@ ORDER BY
 -- よる絞り込みはどちらもなし）と一致するはず -- GROUP BY/JOINで行が消えたり
 -- 重複したりしていないかの確認。期間フィルタ自体はSupersetの仕事なのでここ
 -- では扱わない。
-SELECT
-    (SELECT SUM(rental_count) FROM cur.monthly_rental_count) AS fact_table_total,
-    (SELECT COUNT(*) FROM cur.medical_device_rental_history WHERE calculated_rental_start_date IS NOT NULL) AS source_table_total;
+-- (Commented out 2026-10-06: it reads rental_count, which no longer exists. The
+-- new query 1 above does the same job for the new shape.)
+-- （2026-10-06 にコメントアウト: もう存在しない rental_count を読むため。新しい形では
+-- 上の1番が同じ役目を果たす。）
+-- SELECT
+--     (SELECT SUM(rental_count) FROM cur.monthly_rental_count) AS fact_table_total,
+--     (SELECT COUNT(*) FROM cur.medical_device_rental_history WHERE calculated_rental_start_date IS NOT NULL) AS source_table_total;
 
 -- Option A: manual spot-check, 5-10 sample devices including at least one
 -- rental that spans a month boundary (calculated_rental_start_date and
